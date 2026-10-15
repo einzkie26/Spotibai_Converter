@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spotibai | Diri Na Bai Converter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <span>Spotibai</span>
+        <p>|</p>
+       <h4>Diri Na Bai!</h4>
+    </div>
+      <div class="topbar-right">
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch theme"><span class="theme-icon">◐</span><span class="theme-label">Dark mode</span></button>
+        <a href="/library" class="nav-library">Library</a>
+      </div>
+    </header>
+
+    <section class="hero">
+      <h1>Premium Cost?<br><em>Say Less</em> with Spotibai</h1>
+
+      <form id="convert-form" class="converter-form">
+        <div class="input-row">
+          <input id="spotify-url" name="url" type="url" placeholder="https://open.spotify.com/playlist or track/..." autocomplete="off">
+          <button type="button" id="add-queue-btn"><span>Add to Queue</span><b>+</b></button>
+        </div>
+        <div class="form-meta"><span>playlist, album, or track URL</span><span id="settings-summary">MP3 / 160 kbps</span></div>
+        <ul id="queue-list" class="queue-list" hidden></ul>
+        <div class="settings-grid" aria-label="Output settings">
+          <label>Sound file format
+            <select id="format-select" name="format">
+              <option value="mp3" selected>MP3 (Recommended)</option>
+              <option value="wav">WAV</option>
+              <option value="aac">AAC</option>
+              <option value="flac">FLAC</option>
+              <option value="alac">ALAC</option>
+            </select>
+          </label>
+          <label>Audio quality
+            <select id="bitrate-select" name="bitrate">
+              <option value="96">Low (Voice Quality) / 96 kbps</option>
+              <option value="160" selected>Medium (Balanced Quality) / 160 kbps</option>
+              <option value="320">High (Mainstream App Quality) / 320 kbps</option>
+            </select>
+          </label>
+        </div>
+        <label class="info-toggle" id="spatial-label">
+          <input type="checkbox" id="spatial-toggle">
+          <span class="toggle-track"><span></span></span>
+          <span class="toggle-text">Spatial Audio <em class="toggle-hint">(wider stereo field)</em></span>
+        </label>
+        <div class="form-submit-row">
+          <button id="submit-button" type="submit" disabled><span>Build ZIP</span><b>↗</b></button>
+        </div>
+      </form>
+      <div id="net-stats-bar" class="net-stats-bar" aria-label="Computer network activity" title="Network traffic across this computer. Cached metadata and local encoding may use no network." hidden>
+        <span id="net-status-dot" class="net-dot"></span>
+        <span id="net-status-label">Network</span>
+        <span class="net-stat">↑ <b id="net-sent">—</b></span>
+        <span class="net-stat">↓ <b id="net-recv">—</b></span>
+        <span class="net-stat">Received <b id="net-total-recv">—</b></span>
+        <span class="net-stat" id="net-loss-wrap">Dropped <b id="net-loss">—</b></span>
+        <span class="net-stat" id="net-overflow-wrap">Errors <b id="net-overflow">—</b></span>
+        <span id="net-detail" class="net-detail">Activity on this computer</span>
+      </div>
+      <div id="message" class="message" role="status" aria-live="polite"></div>
+
+      <!-- Panels container -->
+      <div id="panels-container" class="panels-container" hidden>
+        <div id="panel-tabs" class="panel-tabs">
+          <button class="panel-tab panel-tab--active" data-panel="tracks" type="button">Tracks</button>
+          <button class="panel-tab" data-panel="playlists" type="button">Playlists &amp; Albums</button>
+        </div>
+
+        <!-- Tracks panel -->
+        <div id="panel-tracks" class="conversion-panel" hidden>
+          <div class="panel-header">
+            <span class="panel-label">Tracks</span>
+            <div class="panel-header-actions">
+              <button id="cancel-all-tracks" class="cancel-all-btn" type="button" hidden>Cancel remaining</button>
+              <button id="download-tracks" class="download-button" type="button" disabled>Download ZIP</button>
+            </div>
+          </div>
+          <div class="progress-meta"><span id="progress-label-tracks">Preparing</span><strong id="progress-percent-tracks">0%</strong></div>
+          <div class="progress-track"><div id="progress-bar-tracks" class="progress-bar"></div></div>
+          <div class="eta"><span id="track-count-tracks">—</span><span id="eta-tracks">—</span></div>
+          <div id="track-list-tracks" class="track-list"></div>
+        </div>
+
+        <!-- Playlists / albums panel -->
+        <div id="panel-playlists" class="conversion-panel" hidden>
+          <div class="panel-header">
+            <span class="panel-label">Playlists &amp; Albums</span>
+            <div class="panel-header-actions">
+              <button id="cancel-all-playlists" class="cancel-all-btn" type="button" hidden>Cancel remaining</button>
+              <button id="download-playlists" class="download-button" type="button" disabled>Download ZIP</button>
+            </div>
+          </div>
+          <div class="progress-meta"><span id="progress-label-playlists">Preparing</span><strong id="progress-percent-playlists">0%</strong></div>
+          <div class="progress-track"><div id="progress-bar-playlists" class="progress-bar"></div></div>
+          <div class="eta"><span id="track-count-playlists">—</span><span id="eta-playlists">—</span></div>
+          <div id="track-list-playlists" class="track-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <footer>Only download music you own or have permission to use. Spotify links provide metadata; this tool does not bypass Spotify access controls.</footer>
+  </main>
+  <div id="sep-toast-container" aria-live="polite"></div>
+  <script src="/static/downloads.js"></script>
+  <script src="/static/network.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

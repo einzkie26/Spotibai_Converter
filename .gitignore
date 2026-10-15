@@ -1,0 +1,11 @@
+__pycache__/
+.venv/
+.venv-backup-*/
+.cache/
+.python/
+*.pyc
+.env
+.kiro/
+setup.ps1
+start.ps1
+install.cmd

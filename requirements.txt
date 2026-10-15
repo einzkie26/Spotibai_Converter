@@ -1,0 +1,15 @@
+#Install on Windows with: .\install.cmd
+#Manual install: .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Flask>=3.1,<4
+spotdl>=4.5,<5
+psutil>=5.9,<8
+mutagen>=1.47,<2
+requests>=2.32.3,<3
+python-dotenv>=1.0,<2
+waitress>=3.0,<4
+imageio-ffmpeg>=0.6,<1
+filelock>=3.13,<4
+
+#for stem separation.
+demucs>=4.1,<5
+numpy>=1.26,<3

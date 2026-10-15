@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spotibai | Library</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <a href="/" class="brand-home"><span>Spotibai</span></a>
+        <p>|</p>
+        <h4>Library</h4>
+      </div>
+      <div class="topbar-right">
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch theme"><span class="theme-icon">◐</span><span class="theme-label">Dark mode</span></button>
+        <a href="/" class="nav-library">← Converter</a>
+      </div>
+    </header>
+
+    <section class="lib-hero">
+      <h1>Your<br><em>Library</em></h1>
+    </section>
+
+    <section class="lib-studio" aria-labelledby="lib-studio-title">
+      <div class="lib-studio-heading">
+        <h2 id="lib-studio-title">Multitrack editing</h2>
+        <span class="lib-coming-soon">Coming soon</span>
+      </div>
+      <p>A planned workspace to separate layers, arrange parts, shape their sound, and preview your mix before export.</p>
+      <details class="lib-studio-concepts">
+        <summary>Explore the concept <span>Vocals · Chorus · Instruments · Sound effects</span></summary>
+        <div class="lib-studio-grid">
+          <article>
+            <span class="lib-coming-soon">Coming soon</span>
+            <h3>Vocals</h3>
+            <p>A dedicated lead-vocal lane with planned trimming, fades, volume, mute, and solo controls.</p>
+          </article>
+          <article>
+            <span class="lib-coming-soon">Coming soon</span>
+            <h3>Chorus</h3>
+            <p>Explore isolating backing vocals and layered harmonies, then aligning and balancing them with the lead.</p>
+          </article>
+          <article>
+            <span class="lib-coming-soon">Coming soon</span>
+            <h3>Instrument separation</h3>
+            <p>Plan a mix with separate drum, bass, and other instrument lanes, each with its own level and solo controls.</p>
+          </article>
+          <article>
+            <span class="lib-coming-soon">Coming soon</span>
+            <h3>Sound effects</h3>
+            <p>Shape individual layers with planned EQ, reverb, and delay, plus before-and-after listening.</p>
+          </article>
+        </div>
+        <p class="lib-studio-workflow"><strong>Planned workflow</strong> Choose a library track → Separate layers → Arrange &amp; mix → Preview &amp; export</p>
+        <p class="lib-studio-note">Concept preview. These editing tools are in development and are not available yet.</p>
+      </details>
+    </section>
+
+    <div class="lib-toolbar">
+      <div class="lib-search-wrap">
+        <input id="lib-search" type="search" placeholder="Search title, artist, album…" autocomplete="off">
+        <span class="lib-search-icon">⌕</span>
+      </div>
+      <span id="lib-count" class="lib-count"></span>
+    </div>
+
+    <p id="lib-selection-hint" class="lib-selection-hint">Click a card or press Enter to select tracks for removal.</p>
+    <div id="lib-selection-bar" class="lib-selection-bar" role="group" aria-label="Selected tracks" hidden>
+      <strong id="lib-selection-count" role="status" aria-live="polite">0 selected</strong>
+      <div class="lib-selection-actions">
+        <button id="lib-select-all" type="button">Select all shown</button>
+        <button id="lib-selection-cancel" type="button">Cancel</button>
+        <button id="lib-remove-selected" class="lib-remove-selected" type="button" disabled>Remove selected</button>
+      </div>
+    </div>
+
+    <div id="lib-empty" class="lib-empty" hidden>
+      <p>No tracks yet. Convert a playlist or album to start building your library.</p>
+      <a href="/" class="lib-cta">Go to Converter →</a>
+    </div>
+
+    <div id="lib-grid" class="lib-grid"></div>
+
+    <footer>Only download music you own or have permission to use.</footer>
+  </main>
+
+  <div id="preview-bar" class="preview-bar" role="region" aria-label="Audio preview" hidden>
+    <img id="preview-cover" class="preview-cover" src="" alt="">
+    <div class="preview-info">
+      <strong id="preview-title"></strong>
+      <span id="preview-artist"></span>
+    </div>
+    <div class="preview-controls">
+      <button id="preview-toggle" class="preview-toggle" type="button" aria-label="Play preview">▶</button>
+      <select id="preview-source" class="preview-source" aria-label="Preview audio source">
+        <option value="">Original</option>
+        <option value="vocals">Vocals</option>
+        <option value="instrumental">Instrumental</option>
+      </select>
+      <span id="preview-status" class="preview-status" role="status"></span>
+    </div>
+    <div class="preview-timeline">
+      <div class="preview-progress-wrap">
+        <div id="preview-progress" class="preview-progress"></div>
+      </div>
+      <span id="preview-time" class="preview-time">0:07</span>
+    </div>
+    <button id="preview-close" class="preview-close" type="button" aria-label="Close preview">✕</button>
+    <audio id="preview-audio" preload="none"></audio>
+  </div>
+
+  <div id="sep-toast-container" aria-live="polite"></div>
+  <script src="/static/downloads.js"></script>
+  <script src="/static/library.js"></script>
+</body>
+</html>
