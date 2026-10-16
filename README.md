@@ -14,7 +14,7 @@
 <p align="center">
   <a href="#quick-start">Get started</a> &nbsp; / &nbsp;
   <a href="#convert-your-first-collection">Convert a collection</a> &nbsp; / &nbsp;
-  <a href="#your-library">Explore the Library</a> &nbsp; / &nbsp;
+  <a href="#your-library">Explore the Library</a>
 </p>
 
 <p align="center">
