@@ -15,8 +15,6 @@
   <a href="#quick-start">Get started</a> &nbsp; / &nbsp;
   <a href="#convert-your-first-collection">Convert a collection</a> &nbsp; / &nbsp;
   <a href="#your-library">Explore the Library</a> &nbsp; / &nbsp;
-  <a href="#build-a-windows-executable">Build an executable</a> &nbsp; / &nbsp;
-  <a href="docs/technical-reference.md">Technical reference</a>
 </p>
 
 <p align="center">
