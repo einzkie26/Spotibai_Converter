@@ -173,31 +173,6 @@ The Library includes a concept preview for planned lead-vocal editing, chorus an
 | **Stem preparation** | A passing CPU/RAM test and enough current free RAM for the selected track |
 | **Node.js** | Optional, for the alternative backend in the source project |
 
-## Build a Windows executable
-
-From the source project on 64-bit Windows, run:
-
-```powershell
-.\build-exe.cmd
-```
-
-The build installs its tools in a separate packaging environment, bundles the desktop UI, and checks that the packaged window starts.
-
-```text
-dist/
-├── Spotibai-<timestamp>/
-│   ├── Spotibai.exe               ← Open this after extracting the package
-│   ├── _internal/                 ← Keep the supporting runtime files
-│   ├── templates/
-│   └── static/
-├── Spotibai-Windows-<timestamp>.zip ← Share this clean package
-└── latest-build.json              ← Exact paths of the latest build
-```
-
-Share the generated ZIP. It includes app files and excludes your existing music, Library database, `.env`, jobs, caches, and development environments. Your own Library and audio environment are created in the folder where you run the extracted app.
-
-See the [packaging reference](docs/technical-reference.md#build-a-windows-executable) for diagnostics, updates, and moving an existing Library.
-
 ## Troubleshooting
 
 | Problem | Next step |
@@ -216,23 +191,14 @@ For detailed cache behavior, performance settings, model processing, and setup d
 With the project requirements installed, run the regression checks from the source folder:
 
 ```powershell
-# Python backend and shared audio services
+#Python backend and shared audio services
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 
-# Frontend and optional Node backend
+#Frontend and optional Node backend
 npm.cmd test
 ```
 
 The regression suite simulates Spotify and audio download services; it does not download music.
-
-| Part of the project | Main files |
-| :--- | :--- |
-| **Desktop setup** | `launcher.py`, `launcher_core.py`, `launch.ps1`, `setup.ps1` |
-| **Web app** | `app.py`, `templates/`, `static/` |
-| **Shared conversion engine** | `conversion_engine.py`, `metadata_enrichment.py` |
-| **Library audio** | `preview_engine.py`, `stem_engine.py`, `stem_readiness.py`, `library_cache.py` |
-| **Executable packaging** | `build-exe.cmd`, `build-exe.ps1`, `build_exe.py` |
-| **Alternative backend** | `server.js`, `library_bridge.py` |
 
 <p align="center">
   <sub>Built with Flask, spotDL, FFmpeg, and Demucs. The optional Node backend shares the Python audio services.</sub><br>
