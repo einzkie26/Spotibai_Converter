@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <strong>Windows desktop setup</strong> &nbsp; · &nbsp; Python 3.11–3.13 &nbsp; · &nbsp; 5-link queue &nbsp; · &nbsp; Vocals &amp; instrumental
+  <strong>Windows desktop setup</strong>
 </p>
 
 <p align="center">
@@ -24,7 +24,6 @@
     <img src="docs/images/converter-overview.png" alt="Spotibai converter in dark mode, showing output settings and a completed album with a Download ZIP button" width="1120">
   </a>
   <br>
-  <sub>The converter brings link verification, output settings, and collection progress into one view. Select any screenshot to view it at full size.</sub>
 </p>
 
 ## What you can do
