@@ -19,43 +19,96 @@ const networkMonitor = NetworkStats.create();
 let startingJobs = false;
 
 const panelsContainer = document.querySelector('#panels-container');
-const panelTabBtns    = panelsContainer.querySelectorAll('.panel-tab');
+const collectionTabs = document.querySelector('#collection-tabs');
+const collectionSlides = document.querySelector('#collection-slides');
+const carouselNavigation = document.querySelector('#carousel-navigation');
+const previousCollection = document.querySelector('#collection-previous');
+const nextCollection = document.querySelector('#collection-next');
+const collectionPosition = document.querySelector('#collection-position');
+const panels = {};
+const collectionKeys = [];
+let selectedCollection = 0;
+const terminalStates = new Set(['complete', 'error']);
 
-function switchTab(key) {
-  const tabKey = key === 'track' ? 'tracks' : 'playlists';
-  panelTabBtns.forEach(btn => btn.classList.toggle('panel-tab--active', btn.dataset.panel === tabKey));
-  panels.track.panel.hidden    = tabKey !== 'tracks';
-  panels.playlist.panel.hidden = tabKey !== 'playlists';
+function node(tag, className = '', text = '') {
+  const element = document.createElement(tag);
+  element.className = className;
+  element.textContent = text;
+  return element;
 }
 
-panelTabBtns.forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.panel === 'tracks' ? 'track' : 'playlist')));
+function switchTab(key) {
+  const index = collectionKeys.indexOf(key);
+  if (index < 0) return;
+  selectedCollection = index;
+  collectionKeys.forEach(item => {
+    panels[item].panel.hidden = item !== key;
+    panels[item].tab.classList.toggle('panel-tab--active', item === key);
+    panels[item].tab.setAttribute('aria-current', item === key ? 'true' : 'false');
+  });
+  collectionPosition.textContent = `${index + 1} of ${collectionKeys.length}`;
+  previousCollection.disabled = index === 0;
+  nextCollection.disabled = index === collectionKeys.length - 1;
+}
 
-const panels = {
-  track: {
-    panel:     document.querySelector('#panel-tracks'),
-    label:     document.querySelector('#progress-label-tracks'),
-    percent:   document.querySelector('#progress-percent-tracks'),
-    bar:       document.querySelector('#progress-bar-tracks'),
-    count:     document.querySelector('#track-count-tracks'),
-    eta:       document.querySelector('#eta-tracks'),
-    list:      document.querySelector('#track-list-tracks'),
-    dlBtn:     document.querySelector('#download-tracks'),
-    cancelBtn: document.querySelector('#cancel-all-tracks'),
-    jobId: null, startedAt: null,
-  },
-  playlist: {
-    panel:     document.querySelector('#panel-playlists'),
-    label:     document.querySelector('#progress-label-playlists'),
-    percent:   document.querySelector('#progress-percent-playlists'),
-    bar:       document.querySelector('#progress-bar-playlists'),
-    count:     document.querySelector('#track-count-playlists'),
-    eta:       document.querySelector('#eta-playlists'),
-    list:      document.querySelector('#track-list-playlists'),
-    dlBtn:     document.querySelector('#download-playlists'),
-    cancelBtn: document.querySelector('#cancel-all-playlists'),
-    jobId: null, startedAt: null,
-  },
-};
+previousCollection.addEventListener('click', () => switchTab(collectionKeys[selectedCollection - 1]));
+nextCollection.addEventListener('click', () => switchTab(collectionKeys[selectedCollection + 1]));
+
+function createPanel(entry, key = entry.job_id) {
+  if (panels[key]) return panels[key];
+  const p = { jobId: entry.job_id, name: entry.name || 'Spotify collection', type: entry.link_type || entry.type,
+    startedAt: performance.now(), status: { state: 'queued', tracks: [], total: 0, completed: 0 },
+    panel: node('section', 'conversion-panel collection-slide'), label: node('span'), percent: node('strong'),
+    bar: node('div', 'progress-bar'), count: node('span'), eta: node('span'), list: node('div', 'track-list'),
+    dlBtn: node('button', 'download-button', 'Download ZIP'), cancelBtn: node('button', 'cancel-all-btn', 'Skip remaining'),
+    retryBtn: node('button', 'retry-failed-button', 'Retry failed'), resumeBtn: node('button', 'retry-failed-button', 'Resume'),
+    title: node('h2', 'panel-label'), tab: node('button', 'panel-tab'),
+  };
+  p.panel.dataset.jobId = p.jobId;
+  p.panel.setAttribute('aria-label', p.name);
+  p.title.textContent = p.name;
+  p.tab.textContent = p.name;
+  p.tab.title = p.name;
+  p.tab.type = 'button';
+  p.tab.addEventListener('click', () => switchTab(key));
+  const header = node('div', 'panel-header');
+  const actions = node('div', 'panel-header-actions');
+  for (const control of [p.cancelBtn, p.retryBtn, p.resumeBtn, p.dlBtn]) control.type = 'button';
+  p.dlBtn.disabled = true;
+  p.cancelBtn.hidden = p.retryBtn.hidden = p.resumeBtn.hidden = true;
+  p.dlBtn.addEventListener('click', () => doZipDownload(key));
+  p.retryBtn.addEventListener('click', () => retryFailed(key));
+  p.cancelBtn.addEventListener('click', () => cancelRemaining(key));
+  p.resumeBtn.addEventListener('click', async () => {
+    p.resumeBtn.disabled = true;
+    try {
+      const response = await fetch(`/convert/${p.jobId}/resume`, { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not resume this collection.');
+      applyStatus({ state: 'queued' }, key);
+      connectEvents(key);
+    } catch (error) { p.label.textContent = error.message; }
+    finally { p.resumeBtn.disabled = false; }
+  });
+  actions.append(p.cancelBtn, p.retryBtn, p.resumeBtn, p.dlBtn);
+  header.append(p.title, actions);
+  const progress = node('div', 'progress-meta');
+  progress.append(p.label, p.percent);
+  const track = node('div', 'progress-track');
+  p.bar.setAttribute('role', 'progressbar');
+  p.bar.setAttribute('aria-valuemin', '0'); p.bar.setAttribute('aria-valuemax', '100');
+  track.append(p.bar);
+  const eta = node('div', 'eta'); eta.append(p.count, p.eta);
+  p.panel.append(header, progress, track, eta, p.list);
+  panels[key] = p;
+  panelState[key] = { downloaded: new Set(), cancelled: new Set(), es: null };
+  collectionKeys.push(key);
+  collectionTabs.append(p.tab); collectionSlides.append(p.panel);
+  collectionTabs.hidden = carouselNavigation.hidden = collectionKeys.length < 2;
+  panelsContainer.hidden = false;
+  switchTab(collectionKeys[selectedCollection]);
+  return p;
+}
 
 // ── theme ──────────────────────────────────────────────────────────────────
 const setTheme = (t) => {
@@ -74,6 +127,82 @@ themeToggle.addEventListener('click', () => {
 
 // ── queue ──────────────────────────────────────────────────────────────────
 const queue = [];
+const previewBox = document.querySelector('#link-preview');
+const previewName = document.querySelector('#link-preview-name');
+const previewDetail = document.querySelector('#link-preview-detail');
+const previewWarning = document.querySelector('#link-preview-warning');
+const queueCount = document.querySelector('#queue-count');
+let currentPreview = null;
+let previewGeneration = 0;
+let previewTimer;
+let previewAbort;
+let previewLoading = false;
+
+function canonicalLink(url) {
+  const parts = new URL(url.trim()).pathname.replace(/\/$/, '').split('/');
+  return `https://open.spotify.com/${parts.at(-2)}/${parts.at(-1)}`;
+}
+
+function hasRunningJobs() {
+  return Object.values(panels).some(panel => ['queued', 'metadata', 'processing', 'converting', 'packaging'].includes(panel.status.state));
+}
+
+function updateQueueControls() {
+  queueCount.textContent = `${queue.length} / 5 links`;
+  addQueueBtn.disabled = startingJobs || previewLoading || !currentPreview || queue.length >= 5;
+  button.disabled = startingJobs || !queue.length || hasRunningJobs();
+}
+
+async function previewLink() {
+  const url = urlInput.value.trim();
+  const generation = ++previewGeneration;
+  previewAbort?.abort();
+  currentPreview = null;
+  previewLoading = false;
+  if (!isSpotifyUrl(url)) { previewBox.hidden = true; updateQueueControls(); syncNetworkMonitor(); return; }
+  previewAbort = new AbortController();
+  previewLoading = true;
+  previewBox.hidden = false;
+  previewName.textContent = 'Checking this link…';
+  previewDetail.textContent = 'Reading the collection name and track count';
+  previewWarning.hidden = true;
+  updateQueueControls();
+  syncNetworkMonitor();
+  try {
+    const response = await fetch('/collections/preview', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }), signal: previewAbort.signal });
+    const data = await response.json();
+    if (generation !== previewGeneration) return;
+    if (!response.ok || !data.name || !Number.isInteger(data.total) || data.total < 1) {
+      throw new Error(data.error || 'This collection could not be verified.');
+    }
+    if (canonicalLink(urlInput.value) !== canonicalLink(url)) return;
+    currentPreview = { ...data, url: canonicalLink(url), type: spotifyLinkType(url) };
+    previewName.textContent = data.name;
+    previewDetail.textContent = `${currentPreview.type} · ${data.total} track${data.total === 1 ? '' : 's'}`;
+    previewWarning.hidden = !(currentPreview.type === 'playlist' && data.total >= 200);
+    previewWarning.textContent = 'Large playlist: 200 or more tracks. Preparation and conversion will take longer; some audio sources may be unavailable.';
+  } catch (error) {
+    if (generation !== previewGeneration || error.name === 'AbortError') return;
+    previewName.textContent = 'Could not verify this link';
+    previewDetail.textContent = error.message;
+  } finally {
+    if (generation === previewGeneration) { previewLoading = false; updateQueueControls(); syncNetworkMonitor(); }
+  }
+}
+
+urlInput.addEventListener('input', () => {
+  previewGeneration++;
+  previewAbort?.abort();
+  currentPreview = null;
+  previewLoading = false;
+  previewBox.hidden = true;
+  clearTimeout(previewTimer);
+  updateQueueControls();
+  syncNetworkMonitor();
+  if (isSpotifyUrl(urlInput.value.trim())) previewTimer = setTimeout(previewLink, 450);
+});
+urlInput.addEventListener('change', () => { clearTimeout(previewTimer); previewLink(); });
 
 function spotifyLinkType(url) {
   try {
@@ -98,32 +227,44 @@ function renderQueue() {
     const typeTag = document.createElement('span');
     typeTag.className = `queue-type queue-type--${item.type}`;
     typeTag.textContent = item.type;
-    const urlSpan = document.createElement('span');
-    urlSpan.className = 'queue-url';
-    urlSpan.textContent = item.url;
+    const urlSpan = node('div', 'queue-collection');
+    const name = node('strong', 'queue-name', item.name || item.url);
+    const detail = node('span', 'queue-url', `${item.total || 1} track${item.total === 1 ? '' : 's'} · ${item.url}`);
+    urlSpan.append(name, detail);
     const rm = document.createElement('button');
     rm.type = 'button'; rm.className = 'queue-remove';
     rm.dataset.idx = i; rm.textContent = '✕';
     li.append(typeTag, urlSpan, rm);
     queueList.append(li);
   });
-  button.disabled = queue.length === 0;
+  updateQueueControls();
 }
 
 addQueueBtn.addEventListener('click', () => {
+  if (startingJobs) return;
+  if (queue.length >= 5) { message.textContent = 'The queue is full. You can add up to 5 links.'; return; }
   const url = urlInput.value.trim();
   if (!isSpotifyUrl(url)) {
     message.className = 'message';
     message.textContent = 'Paste a valid Spotify link first.';
     return;
   }
-  if (queue.find(q => q.url === url)) {
+  if (!currentPreview || currentPreview.url !== canonicalLink(url)) {
+    clearTimeout(previewTimer); previewLink();
+    message.textContent = 'Review the collection name, then click Add to Queue.';
+    return;
+  }
+  if (queue.find(q => q.url === canonicalLink(url))) {
     message.className = 'message';
     message.textContent = 'Already in queue.';
     return;
   }
-  queue.push({ url, type: spotifyLinkType(url) });
+  if (currentPreview.type === 'playlist' && currentPreview.total >= 200 && !confirm(
+    `“${currentPreview.name}” contains ${currentPreview.total} tracks. Large playlists take longer and may include unavailable audio sources. Add it to the queue?`)) return;
+  queue.push({ ...currentPreview });
   urlInput.value = '';
+  currentPreview = null;
+  previewBox.hidden = true;
   message.textContent = '';
   renderQueue();
 });
@@ -133,6 +274,7 @@ urlInput.addEventListener('keydown', (e) => {
 });
 
 queueList.addEventListener('click', (e) => {
+  if (startingJobs) return;
   const rm = e.target.closest('.queue-remove');
   if (!rm) return;
   queue.splice(Number(rm.dataset.idx), 1);
@@ -155,6 +297,8 @@ const etaStr = (startedAt, done, total) => {
   return `~${fmt(rem)} remaining`;
 };
 const phaseMsg = (state, metaCount, metaTotal) => {
+  if (state === 'queued') return 'Waiting for the previous collection to finish';
+  if (state === 'interrupted') return 'Conversion interrupted. Click Resume to continue.';
   if (state === 'metadata') {
     return metaTotal > 0
       ? `Reading Spotify metadata... (${metaCount}/${metaTotal})`
@@ -177,6 +321,7 @@ const setSettingsDisabled = (d) => {
   spatialLabel.style.pointerEvents = d ? 'none' : '';
   addQueueBtn.disabled = d;
   urlInput.disabled    = d;
+  queueList.querySelectorAll('.queue-remove').forEach(control => { control.disabled = d; });
 };
 const navLibrary = document.querySelector('.nav-library');
 function setConverting(on) {
@@ -209,10 +354,7 @@ function stopCardTimer(panelKey, index) {
 }
 
 // ── per-panel state ────────────────────────────────────────────────────────
-const panelState = {
-  track:    { downloaded: new Set(), cancelled: new Set(), es: null },
-  playlist: { downloaded: new Set(), cancelled: new Set(), es: null },
-};
+const panelState = {};
 const activeTrackStates = new Set(['preparing', 'downloading', 'converting', 'finishing', 'retrying']);
 const trackStateLabels = { pending: 'Queued', preparing: 'Preparing', downloading: 'Downloading',
   converting: 'Converting', finishing: 'Finishing', retrying: 'Retrying source',
@@ -279,7 +421,7 @@ function buildCard(track, index, panelKey) {
     track.format || 'MP3', track.quality || '160 kbps',
     track.spatial ? 'Spatial' : null, track.size || 'Pending',
     track.explicit ? 'E' : null,
-    track.retry_count ? 'Automatic retry' : null,
+    track.retry_count ? `Manual retry ${track.retry_count}` : null,
   ].filter(Boolean)) {
     const tag = document.createElement('i'); tag.textContent = label;
     if (label === 'E') tag.title = 'Explicit';
@@ -287,10 +429,10 @@ function buildCard(track, index, panelKey) {
     tags.append(tag);
   }
   info.append(titleEl, artistEl, albumEl, tags);
-  if (isActive && track.message) {
+  if ((isActive && track.message) || (track.state === 'error' && track.error)) {
     const step = document.createElement('span');
     step.className = 'track-step';
-    step.textContent = track.message;
+    step.textContent = track.state === 'error' ? track.error : track.message;
     info.append(step);
   }
 
@@ -298,6 +440,15 @@ function buildCard(track, index, panelKey) {
   badge.className = 'track-state';
   badge.textContent = track.state === 'preparing' && track.retry_count ? 'Preparing again' : trackStateLabels[track.state] || 'Queued';
   badge.title = track.error || track.message || '';
+
+  if (track.state === 'error') {
+    const retry = node('button', 'retry-track', 'Retry');
+    retry.type = 'button'; retry.dataset.panel = panelKey; retry.dataset.trackIndex = index;
+    retry.disabled = !terminalStates.has(p.status.state);
+    retry.title = retry.disabled ? 'Available after all tracks finish converting' : 'Prepare and convert this failed track again';
+    card.append(cbWrap, cover, info, retry, badge);
+    return card;
+  }
 
   if (isConverted && p.jobId) {
     stopCardTimer(panelKey, index);
@@ -337,10 +488,11 @@ function renderTracks(tracks, panelKey) {
     const prevCover = existing?.dataset.trackCover;
     const prevMessage = existing?.dataset.trackMessage;
     const prevRetry = existing?.dataset.trackRetry;
+    const retryAllowed = String(terminalStates.has(panels[panelKey].status.state));
     if (track.retry_count && !['converted', 'cancelled'].includes(track.state) && prevRetry !== String(track.retry_count)) {
       retriesStarted = true;
     }
-    if (existing && prevState === track.state && prevSize === (track.size||'') && prevCover === (track.cover_url||'') && prevMessage === (track.message||'') && prevRetry === String(track.retry_count || 0)) {
+    if (existing && prevState === track.state && prevSize === (track.size||'') && prevCover === (track.cover_url||'') && prevMessage === (track.message||'') && prevRetry === String(track.retry_count || 0) && (track.state !== 'error' || existing.dataset.retryAllowed === retryAllowed)) {
       if (activeTrackStates.has(track.state) && track.elapsed_s != null && !cardTimers.has(`${panelKey}:${index}`)) {
         const el = existing.querySelector('.track-elapsed');
         if (el) startCardTimer(panelKey, index, track.elapsed_s, el);
@@ -353,6 +505,7 @@ function renderTracks(tracks, panelKey) {
     card.dataset.trackCover = track.cover_url || '';
     card.dataset.trackMessage = track.message || '';
     card.dataset.trackRetry = String(track.retry_count || 0);
+    card.dataset.retryAllowed = retryAllowed;
     if (existing) list.replaceChild(card, existing);
     else list.append(card);
   });
@@ -370,35 +523,14 @@ function renderTracks(tracks, panelKey) {
   if (retriesStarted) panels[panelKey].panel.scrollTop = 0;
 }
 
-function showMetaLog(msg, count, total, panelKey) {
-  const p = panels[panelKey];
-  // update progress bar + count during metadata phase
-  if (total > 0) {
-    const pct = Math.round((count / total) * 100);
-    p.bar.style.width     = `${pct}%`;
-    p.bar.classList.remove('indeterminate');
-    p.percent.textContent = `${pct}%`;
-    p.count.textContent   = `${count} of ${total} track${total === 1 ? '' : 's'}`;
-  } else {
-    p.bar.classList.add('indeterminate');
-  }
-  // scroll log
-  const list = p.list;
-  // keep only last 6 log lines to avoid overflow
-  const existing = list.querySelectorAll('.meta-log-line');
-  if (existing.length >= 6) existing[0].remove();
-  const el = document.createElement('p');
-  el.className = 'meta-log-line';
-  el.textContent = msg;
-  list.append(el);
-}
-
-// ── apply SSE status to a panel ────────────────────────────────────────────
 function applyStatus(status, panelKey) {
   const p          = panels[panelKey];
   p.status = { ...p.status, ...status };
   const { state, tracks = [], total = 0, completed = 0, meta_count, meta_total, metadata_loading, metadata_errors = [], error } = p.status;
   const isComplete = state === 'complete';
+  if (p.status.name) p.name = p.status.name;
+  p.title.textContent = p.name;
+  p.panel.setAttribute('aria-label', p.name);
   const processed = tracks.reduce((sum, track) => sum +
     (['converted', 'cancelled', 'error'].includes(track.state) ? 100 : (track.progress_pct || 0)), 0);
   const pct = isComplete ? 100 : (total > 0 ? Math.min(99, Math.round(processed / total)) : 0);
@@ -419,7 +551,9 @@ function applyStatus(status, panelKey) {
   if (state === 'error') p.label.textContent = error || 'Conversion failed.';
   p.percent.textContent = `${pct}%`;
   p.bar.style.width     = `${pct}%`;
-  p.bar.classList.toggle('indeterminate', !isComplete && total === 0);
+  p.bar.setAttribute('aria-valuenow', String(pct));
+  p.bar.setAttribute('aria-label', `${p.name}: ${pct}%`);
+  p.bar.classList.toggle('indeterminate', ['metadata', 'processing'].includes(state) && total === 0);
 
   if (total > 0) {
     p.count.textContent = state === 'metadata'
@@ -431,55 +565,49 @@ function applyStatus(status, panelKey) {
   } else if (state === 'error') {
     p.count.textContent = 'No tracks loaded';
     p.bar.classList.remove('indeterminate');
+  } else {
+    p.count.textContent = state === 'queued' ? 'Queued' : 'Preparing…';
+    p.eta.textContent = '';
   }
+  if (state === 'queued') p.eta.textContent = 'Collections prepare and convert one at a time';
 
   if (tracks && tracks.length) {
     panels[panelKey].list.querySelectorAll('.meta-log-line').forEach(el => el.remove());
     renderTracks(tracks, panelKey);
   }
 
-  if (isComplete) {
-    p.dlBtn.disabled    = false;
-    p.cancelBtn.hidden  = true;
-  } else if (state === 'converting' || state === 'processing' || (state === 'metadata' && tracks.length)) {
-    p.cancelBtn.hidden = false;
-  } else if (state === 'error') {
-    p.cancelBtn.hidden = true;
-  }
+  p.dlBtn.disabled = !isComplete || completed === 0;
+  p.dlBtn.textContent = p.type === 'track' ? 'Download track' : 'Download ZIP';
+  p.cancelBtn.hidden = !['converting', 'processing', 'metadata'].includes(state) || !tracks.length;
+  p.retryBtn.hidden = failed === 0;
+  p.retryBtn.disabled = !terminalStates.has(state);
+  p.retryBtn.textContent = `Retry failed (${failed})`;
+  p.resumeBtn.hidden = state !== 'interrupted';
+  const label = state === 'queued' ? 'Waiting' : state === 'complete' ? (failed ? `Done · ${failed} failed` : 'Done')
+    : state === 'error' ? 'Failed' : state === 'metadata' ? 'Preparing' : state === 'interrupted' ? 'Interrupted' : 'Converting';
+  p.tab.textContent = `${p.name} · ${label}`;
+  p.tab.title = `${p.name} — ${label}`;
+  updateQueueControls();
   syncNetworkMonitor();
 }
 
 // ── start one job and wire SSE ─────────────────────────────────────────────
-function startJob(jobId, panelKey) {
-  const p  = panels[panelKey];
-  const ps = panelState[panelKey];
-  p.jobId     = jobId;
-  p.startedAt = performance.now();
-  p.status = { state: 'metadata', tracks: [], total: 0, completed: 0 };
-  syncNetworkMonitor();
-  panelsContainer.hidden = false;
-  switchTab(panelKey);
-  p.dlBtn.disabled = true;
-  p.dlBtn.textContent = 'Download ZIP';
-  p.cancelBtn.hidden  = true;
-  p.list.replaceChildren();
-  p.bar.style.width     = '0%';
-  p.percent.textContent = '0%';
-  p.count.textContent   = 'Preparing...';
-  p.label.textContent   = phaseMsg('metadata', 0, 0);
-  p.eta.textContent     = '';
-  ps.downloaded.clear();
-  ps.cancelled.clear();
-  cardTimers.forEach((id, k) => { if (k.startsWith(panelKey+':')) { clearInterval(id); cardTimers.delete(k); } });
+function startJob(jobId, panelKey = jobId, entry = {}) {
+  createPanel({ ...entry, job_id: jobId }, panelKey);
+  applyStatus({ state: 'metadata', ...entry }, panelKey);
+  if (!terminalStates.has(panels[panelKey].status.state) && panels[panelKey].status.state !== 'interrupted') connectEvents(panelKey);
+}
 
+function connectEvents(panelKey) {
+  const p = panels[panelKey];
+  const ps = panelState[panelKey];
   if (ps.es) { ps.es.close(); ps.es = null; }
-  const es = new EventSource(`/convert/${jobId}/events`);
+  const es = new EventSource(`/convert/${p.jobId}/events`);
   ps.es = es;
   es.onmessage = (e) => {
     const ev = JSON.parse(e.data);
     if (ev.type === 'snapshot' || ev.type === 'tracks' || ev.type === 'state') {
       applyStatus(ev, panelKey);
-      if (ev.meta_log && !ev.tracks?.length) showMetaLog(ev.meta_log, ev.meta_count, ev.meta_total, panelKey);
     } else if (ev.type === 'complete') {
       applyStatus({ ...ev, state:'complete', tracks: ev.tracks||[], total: ev.total||0, completed: ev.completed||0 }, panelKey);
       es.close(); ps.es = null;
@@ -489,68 +617,65 @@ function startJob(jobId, panelKey) {
     }
     if (ev.state === 'complete' || ev.state === 'error') { es.close(); ps.es = null; }
   };
-  es.onerror = () => { es.close(); ps.es = null; p.label.textContent = 'Connection lost.'; };
+  es.onerror = () => { p.label.textContent = 'Reconnecting to conversion progress…'; };
+}
+
+async function retryFailed(panelKey, indices) {
+  const p = panels[panelKey];
+  if (!terminalStates.has(p.status.state) || p.retryPending) return false;
+  p.retryPending = true;
+  p.retryBtn.disabled = true;
+  try {
+    const response = await fetch(`/convert/${p.jobId}/retry`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(indices ? { indices } : {}) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not retry the failed tracks.');
+    p.startedAt = performance.now();
+    applyStatus({ state: 'queued', error: '' }, panelKey);
+    connectEvents(panelKey);
+    return true;
+  } catch (error) { p.label.textContent = error.message; p.retryBtn.disabled = false; return false; }
+  finally { p.retryPending = false; }
 }
 
 // ── form submit ────────────────────────────────────────────────────────────
-form.addEventListener('submit', async (event) => {
+// Submit all links in order; the server runs one collection at a time.
+form.addEventListener('submit', async event => {
   event.preventDefault();
-  if (queue.length === 0) return;
-
-  button.disabled = true;
-  button.querySelector('span').textContent = 'Building...';
-  message.className   = 'message busy';
-  message.textContent = 'Starting conversion...';
-  setConverting(true);
+  if (!queue.length || startingJobs || hasRunningJobs()) return;
   startingJobs = true;
+  setConverting(true);
+  updateQueueControls();
   syncNetworkMonitor();
-
-  const fmt_val     = formatSelect.value;
-  const bitrate_val = bitrateSelect.value;
-  const spatial_val = spatialToggle.checked;
-
-  // Each panel owns one job, including every URL queued for that panel.
-  const queuedItems = queue.splice(0);
-  const jobs = ['track', 'playlist'].map(panelKey => ({
-    panelKey,
-    urls: queuedItems.filter(item => (item.type === 'track' ? 'track' : 'playlist') === panelKey)
-      .map(item => item.url),
-  })).filter(job => job.urls.length);
-  renderQueue();
-
-  await Promise.allSettled(jobs.map(async ({ panelKey, urls }) => {
-    try {
-      const res = await fetch('/convert', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urls, format: fmt_val, bitrate: bitrate_val, spatial: spatial_val }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        panels[panelKey].label.textContent = err.error || 'Failed to start.';
-        panelsContainer.hidden = false;
-        switchTab(panelKey);
-        return;
-      }
-      const { job_id } = await res.json();
-      startJob(job_id, panelKey);
-    } catch (e) {
-      panels[panelKey].label.textContent = e.message;
-      panelsContainer.hidden = false;
-      switchTab(panelKey);
-    }
-  }));
-
-  message.className   = 'message';
-  message.textContent = '';
-  button.disabled = false;
-  button.querySelector('span').textContent = 'Build ZIP';
-  setConverting(false);
-  startingJobs = false;
-  syncNetworkMonitor();
+  message.textContent = 'Starting your collection queue...';
+  const submitted = [...queue];
+  try {
+    const response = await fetch('/convert', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls: submitted.map(item => item.url), collections: submitted,
+        format: formatSelect.value, bitrate: bitrateSelect.value, spatial: !!spatialToggle.checked }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'The conversion queue could not be started.');
+    const accepted = data.jobs || [{ job_id: data.job_id, state: 'queued', ...submitted[0] }];
+    if (!accepted.length || accepted.some(job => !job.job_id)) throw new Error('The server did not return the queued collections.');
+    for (const key of collectionKeys) { panelState[key].es?.close(); delete panels[key]; delete panelState[key]; }
+    cardTimers.forEach(timer => clearInterval(timer)); cardTimers.clear();
+    collectionKeys.splice(0); selectedCollection = 0;
+    collectionTabs.replaceChildren(); collectionSlides.replaceChildren();
+    accepted.forEach((job, index) => startJob(job.job_id, job.job_id, {
+      ...submitted[index], ...job, name: job.name || submitted[index]?.name || 'Spotify collection',
+      link_type: job.link_type || submitted[index]?.type,
+    }));
+    queue.splice(0, submitted.length);
+    message.textContent = 'Each collection will prepare and convert after the previous one finishes.';
+  } catch (error) { message.textContent = error.message; }
+  finally {
+    startingJobs = false;
+    setConverting(false);
+    renderQueue();
+    syncNetworkMonitor();
+  }
 });
 
-// ── checkbox cancel (delegated on document) ────────────────────────────────
 document.addEventListener('change', async (e) => {
   const cb = e.target.closest('.cancel-checkbox');
   if (!cb) return;
@@ -575,20 +700,24 @@ document.addEventListener('change', async (e) => {
 });
 
 // ── cancel-all buttons ─────────────────────────────────────────────────────
-document.querySelector('#cancel-all-tracks').addEventListener('click', async () => {
-  const p  = panels.track;
-  const ps = panelState.track;
-  if (!p.jobId) return;
-  p.list.querySelectorAll('.cancel-checkbox:not(:checked)').forEach(cb => { cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); });
-});
-document.querySelector('#cancel-all-playlists').addEventListener('click', async () => {
-  const p  = panels.playlist;
-  if (!p.jobId) return;
-  p.list.querySelectorAll('.cancel-checkbox:not(:checked)').forEach(cb => { cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); });
-});
+async function cancelRemaining(panelKey) {
+  const p = panels[panelKey];
+  const indices = p.status.tracks.flatMap((track, index) =>
+    track.state === 'pending' || activeTrackStates.has(track.state) ? [index] : []);
+  p.cancelBtn.disabled = true;
+  try {
+    await Promise.all(indices.map(async index => {
+      const response = await fetch(`/convert/${p.jobId}/tracks/${index}/cancel`, { method: 'POST' });
+      if (!response.ok) throw new Error('Some tracks could not be skipped. Try again.');
+      panelState[panelKey].cancelled.add(index);
+    }));
+  } catch (error) { p.label.textContent = error.message; }
+  finally { p.cancelBtn.disabled = false; }
+}
 
-// ── individual track downloads ─────────────────────────
 document.addEventListener('click', async (e) => {
+  const retry = e.target.closest('.retry-track');
+  if (retry) { if (!retry.disabled) await retryFailed(retry.dataset.panel, [Number(retry.dataset.trackIndex)]); return; }
   // per-track download
   const dlBtn = e.target.closest('.download-track');
   if (dlBtn) {
@@ -619,7 +748,7 @@ async function doZipDownload(panelKey) {
   p.dlBtn.disabled = true; p.dlBtn.textContent = 'Preparing...';
   try {
     await Downloads.download(`/convert/${p.jobId}/download`, {
-      toast: Downloads.createToast(panelKey === 'track' ? 'Track download' : 'Album ZIP download'),
+      toast: Downloads.createToast(p.type === 'track' ? 'Track download' : `${p.name} ZIP`),
       fallbackName: p.status.archive_name || 'Spotify collection.zip',
     });
     p.dlBtn.textContent = 'Downloaded';
@@ -627,19 +756,17 @@ async function doZipDownload(panelKey) {
     p.dlBtn.disabled = false; p.dlBtn.textContent = 'Try Again'; p.dlBtn.title = error.message;
   }
 }
-document.querySelector('#download-tracks').addEventListener('click', () => doZipDownload('track'));
-document.querySelector('#download-playlists').addEventListener('click', () => doZipDownload('playlist'));
 
 // Monitoring follows server jobs, independently of the form's disabled state.
 function syncNetworkMonitor() {
   const active = Object.values(panels).filter(panel => panel.jobId &&
-    ['metadata', 'processing', 'converting', 'packaging'].includes(panel.status?.state));
-  if (!startingJobs && !active.length) { networkMonitor.stop(); return; }
+    ['queued', 'metadata', 'processing', 'converting', 'packaging'].includes(panel.status?.state));
+  if (!startingJobs && !previewLoading && !active.length) { networkMonitor.stop(); return; }
   const tracks = active.flatMap(panel => panel.status.tracks || []);
   let phase = 'Preparing';
   if (tracks.some(track => track.state === 'downloading')) phase = 'Downloading';
   else if (tracks.some(track => track.state === 'converting')) phase = 'Converting';
-  else if (startingJobs || active.some(panel => panel.status.state === 'metadata' || panel.status.metadata_loading)) phase = 'Metadata';
+  else if (startingJobs || previewLoading || active.some(panel => panel.status.state === 'metadata' || panel.status.metadata_loading)) phase = 'Metadata';
   else if (tracks.some(track => ['preparing', 'retrying'].includes(track.state))) phase = 'Preparing';
   else if (active.some(panel => panel.status.state === 'packaging')) phase = 'Packaging';
   else if (tracks.some(track => track.state === 'finishing')) phase = 'Finishing';
@@ -648,51 +775,18 @@ function syncNetworkMonitor() {
 }
 
 // ── resume interrupted jobs on page load ─────────────────────────────────────────
+// Restore collections, including failed tracks waiting for a manual retry.
 (async () => {
-  let jobs;
-  try { jobs = await fetch('/jobs').then(r => r.json()); } catch { return; }
-  const resumable = jobs.filter(j => j.state === 'interrupted');
-  const active    = jobs.filter(j => j.state !== 'interrupted');
-
-  // reconnect SSE for jobs that were already running when page loaded
-  active.forEach(j => {
-    const panelKey = j.link_type === 'track' ? 'track' : 'playlist';
-    panelsContainer.hidden = false;
-    switchTab(panelKey);
-    panels[panelKey].jobId     = j.job_id;
-    panels[panelKey].startedAt = performance.now();
-    applyStatus({ state: j.state, tracks: j.tracks, total: j.total, completed: j.completed }, panelKey);
-    startJob(j.job_id, panelKey);
-  });
-
-  if (!resumable.length) return;
-
-  const banner = document.createElement('div');
-  banner.className = 'resume-banner';
-  banner.innerHTML = resumable.map(j => {
-    const label = j.link_type === 'track' ? 'Track' : 'Playlist/Album';
-    const pct   = j.total ? Math.round((j.completed / j.total) * 100) : 0;
-    return `<span>${label} &mdash; ${j.completed}/${j.total} tracks (${pct}% done)</span>
-            <button class="resume-btn" data-job="${j.job_id}" data-panel="${j.link_type === 'track' ? 'track' : 'playlist'}" type="button">Resume</button>
-            <button class="resume-dismiss" data-job="${j.job_id}" type="button">&times;</button>`;
-  }).join('');
-  document.querySelector('.hero').prepend(banner);
-
-  banner.addEventListener('click', async (e) => {
-    const btn = e.target.closest('.resume-btn');
-    const dis = e.target.closest('.resume-dismiss');
-    if (dis) {
-      banner.remove();
-      await fetch(`/convert/${dis.dataset.job}/resume`, { method: 'POST' }).catch(() => {});
-      return;
-    }
-    if (!btn) return;
-    btn.disabled = true; btn.textContent = 'Resuming…';
-    const res = await fetch(`/convert/${btn.dataset.job}/resume`, { method: 'POST' });
-    if (!res.ok) { btn.disabled = false; btn.textContent = 'Retry'; return; }
-    const { job_id } = await res.json();
-    banner.remove();
-    startJob(job_id, btn.dataset.panel);
-  });
+  try {
+    const jobs = await fetch('/jobs').then(response => response.json());
+    if (!Array.isArray(jobs) || !jobs.length || collectionKeys.length) return;
+    const active = jobs.find(job => ['queued', 'metadata', 'processing', 'converting', 'packaging'].includes(job.state));
+    const batch = active?.batch_id || jobs.at(-1).batch_id;
+    const restored = batch ? jobs.filter(job => job.batch_id === batch) : jobs.slice(-5);
+    restored.sort((a, b) => (a.batch_position || 0) - (b.batch_position || 0));
+    restored.forEach(job => startJob(job.job_id, job.job_id, job));
+    const running = restored.find(job => ['metadata', 'processing', 'converting', 'packaging'].includes(job.state));
+    if (running) switchTab(running.job_id);
+  } catch { message.textContent = 'Previous conversion progress could not be restored. Refresh to try again.'; }
 })();
-
+updateQueueControls();

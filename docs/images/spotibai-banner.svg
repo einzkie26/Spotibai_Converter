@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 252" role="img" aria-labelledby="title desc">
+  <title id="title">Spotibai</title>
+  <desc id="desc">A local audio workspace. Dark green branding with coral lettering and lime sound waves.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#20372f"/>
+      <stop offset="1" stop-color="#101816"/>
+    </linearGradient>
+    <pattern id="dots" width="16" height="16" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r=".65" fill="#b5c8bd" opacity=".13"/>
+    </pattern>
+  </defs>
+  <rect width="1120" height="252" rx="18" fill="url(#background)"/>
+  <rect width="1120" height="252" rx="18" fill="url(#dots)"/>
+  <path d="M50 201h1020" stroke="#96aa9c" stroke-opacity=".22"/>
+  <text x="50" y="58" fill="#c9e96c" font-family="Segoe UI,Arial,sans-serif" font-size="13" letter-spacing="3">LOCAL AUDIO WORKSPACE</text>
+  <text x="46" y="150" fill="#f3f1e7" font-family="Segoe UI,Arial,sans-serif" font-size="86" font-weight="700" letter-spacing="-5">Spotibai<tspan fill="#ff8b77">.</tspan></text>
+  <text x="51" y="229" fill="#b9c9bf" font-family="Segoe UI,Arial,sans-serif" font-size="14" letter-spacing="1">CONVERT / ORGANIZE / LISTEN</text>
+  <g fill="#c9e96c">
+    <rect x="791" y="111" width="12" height="30" rx="6" opacity=".45"/>
+    <rect x="817" y="95" width="12" height="62" rx="6" opacity=".65"/>
+    <rect x="843" y="73" width="12" height="106" rx="6" opacity=".85"/>
+    <rect x="869" y="54" width="12" height="144" rx="6"/>
+    <rect x="895" y="82" width="12" height="88" rx="6"/>
+    <rect x="921" y="101" width="12" height="50" rx="6" opacity=".85"/>
+    <rect x="947" y="88" width="12" height="76" rx="6" opacity=".65"/>
+    <rect x="973" y="107" width="12" height="38" rx="6" opacity=".45"/>
+  </g>
+</svg>

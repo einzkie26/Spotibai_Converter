@@ -8,14 +8,17 @@ const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
+const { createHash } = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const archiver = require('archiver');
 
 const app = express();
-app.use(express.json({ limit: '4kb' }));
+app.use(express.json({ limit: '16kb' }));
 app.use('/static', express.static(path.join(__dirname, 'static')));
 
 const JOBS = new Map();
+const conversionQueue = [];
+let queueRunning = false;
 const FORMATS = new Set(['mp3', 'wav', 'aac', 'flac', 'alac']);
 const BITRATES = { '96': '96k', '160': '160k', '320': '320k', '1411': '1411k' };
 const SPOTIFY_PATH = /^\/(?:intl-[^/]+\/)?(?:playlist|album|track)\/[A-Za-z0-9]+\/?$/;
@@ -138,7 +141,9 @@ const WORKERS = Math.max(1, Math.min(8, Number(process.env.CONVOTIFY_WORKERS) ||
 function broadcast(jobId, data) {
   const job = JOBS.get(jobId);
   if (!job) return;
-  const msg = `data: ${JSON.stringify({ state: job.state, archive_name: job.archive_name, ...data })}\n\n`;
+  const event = { state: job.state, name: job.name, archive_name: job.archive_name, ...data };
+  if (event.tracks) event.tracks = publicTracks(event.tracks);
+  const msg = `data: ${JSON.stringify(event)}\n\n`;
   for (const res of job.sseClients) {
     try { res.write(msg); } catch {}
   }
@@ -146,12 +151,12 @@ function broadcast(jobId, data) {
 
 // ── conversion job ─────────────────────────────────────────────────────────
 
-async function runJob(jobId, playlistUrl, format, bitrate, type_) {
+async function runJob(jobId, playlistUrl, format, bitrate, type_, retryIndices = null) {
   const started = Date.now();
   const job = JOBS.get(jobId);
-  const jobDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'convotify-'));
+  const jobDir = retryIndices ? job.jobDir : await fsp.mkdtemp(path.join(os.tmpdir(), 'convotify-'));
   const outputDir = path.join(jobDir, 'tracks');
-  await fsp.mkdir(outputDir);
+  await fsp.mkdir(outputDir, { recursive: true });
   const env = { ...process.env, PATH: `${path.dirname(FFMPEG)}${path.delimiter}${process.env.PATH}` };
 
   job.jobDir = jobDir;
@@ -159,7 +164,8 @@ async function runJob(jobId, playlistUrl, format, bitrate, type_) {
 
   try {
     // Bulk metadata and one reusable Python worker process per job.
-    await runWithNodeWorker(jobId, playlistUrl, outputDir, format, bitrate, env);
+    job.error = '';
+    await runWithNodeWorker(jobId, playlistUrl, outputDir, format, bitrate, env, retryIndices);
     const packagingStarted = Date.now();
 
     // stamp spatial flag on all tracks for frontend display
@@ -172,7 +178,7 @@ async function runJob(jobId, playlistUrl, format, bitrate, type_) {
 
     const trackNames = finalFiles.map(f => path.basename(f));
 
-    if (type_ === 'track') {
+    if (type_ === 'track' && job.tracks.length === 1) {
       job.state = 'complete';
       job.filePath = finalFiles[0];
       job.trackNames = trackNames;
@@ -184,7 +190,9 @@ async function runJob(jobId, playlistUrl, format, bitrate, type_) {
     // 3. zip
     job.state = 'packaging';
     broadcast(jobId, { type: 'state', state: 'packaging' });
-    const zipPath = path.join(jobDir, job.archive_name);
+    const archiveFolder = path.join(jobDir, 'archive-' + uuidv4().slice(0, 8));
+    await fsp.mkdir(archiveFolder);
+    const zipPath = path.join(archiveFolder, job.archive_name);
     await new Promise((resolve, reject) => {
       const out = fs.createWriteStream(zipPath);
       const arc = archiver('zip', { store: true });
@@ -207,7 +215,7 @@ async function runJob(jobId, playlistUrl, format, bitrate, type_) {
     job.metadata_loading = false;
     job.error = err.message;
     broadcast(jobId, { type: 'error', error: err.message });
-    try { fs.rmSync(jobDir, { recursive: true, force: true }); } catch {}
+    if (!job.tracks.length) { try { fs.rmSync(jobDir, { recursive: true, force: true }); } catch {} }
   }
 }
 
@@ -233,6 +241,7 @@ async function loadMetadata(playlistUrl, metaPath, env, format, bitrate, onTrack
   if (!Array.isArray(raw) || !raw.length) {
     throw new Error('No tracks found. Check that the Spotify album or playlist is available.');
   }
+  const collectionRevision = createHash('sha256').update(JSON.stringify(raw.map(item => item?.url || null))).digest('hex');
   return raw.map((item, i) => {
     const sourceUrl = item && (item.url || (linkType(playlistUrl) === 'track' ? playlistUrl : ''));
     if (!sourceUrl || !isSpotifyUrl(sourceUrl) || linkType(sourceUrl) !== 'track') {
@@ -244,6 +253,11 @@ async function loadMetadata(playlistUrl, metaPath, env, format, bitrate, onTrack
       artist: item.artist || (Array.isArray(item.artists) ? item.artists.join(', ') : '') || 'Unknown',
       album: item.album_name || '',
       collection_name: item.list_name || (linkType(playlistUrl) === 'album' ? item.album_name : '') || '',
+      collection_url: ['album', 'playlist'].includes(linkType(playlistUrl)) ? canonicalSpotifyUrl(playlistUrl) : '',
+      collection_kind: linkType(playlistUrl),
+      collection_position: i + 1,
+      collection_total: raw.length,
+      collection_revision: collectionRevision,
       album_artist: item.album_artist || '',
       cover_url: item.cover_url || '',
       track_number: item.track_number || i + 1,
@@ -266,21 +280,22 @@ async function loadMetadata(playlistUrl, metaPath, env, format, bitrate, onTrack
   });
 }
 
-async function runWithNodeWorker(jobId, playlistUrl, outputDir, format, bitrate, env) {
+async function runWithNodeWorker(jobId, playlistUrl, outputDir, format, bitrate, env, retryIndices = null) {
   const started = Date.now();
   const job = JOBS.get(jobId);
   const metaPath = path.join(path.dirname(outputDir), 'metadata.spotdl');
 
-  job.state = 'metadata';
-  broadcast(jobId, { type: 'state', state: 'metadata' });
+  const retrying = retryIndices !== null;
+  job.state = retrying ? 'processing' : 'metadata';
+  broadcast(jobId, { type: 'state', state: job.state });
 
   const urls = Array.isArray(playlistUrl) ? playlistUrl : [playlistUrl];
-  const metadata = [];
+  const metadata = retrying ? job.tracks : [];
   job.tracks = metadata;
-  job.metadata_loading = true;
-  job.metadata_errors = [];
+  job.metadata_loading = !retrying;
+  if (!retrying) job.metadata_errors = [];
   const queue = [];
-  let discoveryDone = false;
+  let discoveryDone = retrying;
   let conversionStarted;
   let workerPromise;
   let workerError;
@@ -289,10 +304,9 @@ async function runWithNodeWorker(jobId, playlistUrl, outputDir, format, bitrate,
   function startWorker() {
     conversionStarted = Date.now();
     return new Promise((resolve, reject) => {
-      let settled = 0;
+      let settled = retrying ? metadata.length - retryIndices.length : 0;
       let running = 0;
       let closing = false;
-      let retryPassStarted = false;
       let stopped = false;
       let buffer = '';
       let diagnostics = '';
@@ -416,25 +430,6 @@ async function runWithNodeWorker(jobId, playlistUrl, outputDir, format, bitrate,
           proc.stdin.write(JSON.stringify({ index: track.index, track, output_dir: trackDir, save_library: true }) + '\n');
         }
         if (discoveryDone && settled === metadata.length && !closing) {
-          if (!retryPassStarted) {
-            retryPassStarted = true;
-            const failed = metadata.filter(track => track.state === 'error');
-            if (failed.length) {
-              for (const track of failed) {
-                track.state = 'pending';
-                track.retry_count = 1;
-                track.progress_pct = 0;
-                track.elapsed_s = 0;
-                track.message = 'Waiting to prepare again';
-                delete track.error;
-                queue.push(track);
-              }
-              settled -= failed.length;
-              broadcast(jobId, { type: 'tracks', tracks: job.tracks, completed: job.completed, total: job.total });
-              next();
-              return;
-            }
-          }
           closing = true;
           proc.stdin.end();
         }
@@ -445,12 +440,27 @@ async function runWithNodeWorker(jobId, playlistUrl, outputDir, format, bitrate,
   }
 
   try {
-    for (const url of urls) {
+    if (retrying) {
+      for (const index of retryIndices) {
+        const track = metadata[index];
+        if (track.state === 'cancelled') { queue.push(track); continue; }
+        track.retry_count = (track.retry_count || 0) + 1;
+        track.state = 'pending';
+        track.progress_pct = 0;
+        track.message = 'Waiting for manual retry';
+        delete track.error;
+        queue.push(track);
+      }
+      workerPromise = startWorker();
+      workerPromise.catch(() => {});
+    }
+    for (const url of retrying ? [] : urls) {
       const offset = metadata.length;
       const loading = loadMetadata(url, metaPath, env, format, bitrate, (track, count, total) => {
         if (workerError) throw workerError;
         track.index = metadata.length;
         metadata.push(track);
+        job.name = track.collection_name || job.name || track.title;
         queue.push(track);
         job.total = offset + total;
         job.meta_count = offset + count;
@@ -489,6 +499,37 @@ async function runWithNodeWorker(jobId, playlistUrl, outputDir, format, bitrate,
   job.timings.conversion_s = (Date.now() - conversionStarted) / 1000;
 }
 
+async function drainConversions() {
+  if (queueRunning) return;
+  queueRunning = true;
+  try {
+    while (conversionQueue.length) {
+      const { jobId, retryIndices } = conversionQueue.shift();
+      const job = JOBS.get(jobId);
+      if (job) {
+        try { await runJob(jobId, job.urls, job.format, BITRATES[job.bitrate], job.link_type, retryIndices); }
+        catch (error) { job.state = 'error'; job.error = error.message; broadcast(jobId, { type: 'error', error: error.message }); }
+      }
+    }
+  } finally { queueRunning = false; }
+}
+
+function enqueueConversions(entries) {
+  conversionQueue.push(...entries);
+  drainConversions().catch(error => console.error('Conversion queue:', error.message));
+}
+
+function publicTracks(tracks) {
+  return tracks.map(({ spotdl_data, filePath, startedAt, ...track }) => track);
+}
+
+function publicJob(job) {
+  const { state, tracks, total, completed, format, bitrate, link_type, timings, cached_tracks, metadata_loading,
+    metadata_errors, archive_name, name, urls, batch_id, batch_position, error } = job;
+  return { state, tracks: publicTracks(tracks), total, completed, format, bitrate, link_type, timings, cached_tracks, metadata_loading,
+    metadata_errors, archive_name, name, urls, batch_id, batch_position, error };
+}
+
 // ── routes ─────────────────────────────────────────────────────────────────
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'templates', 'index.html')));
@@ -498,25 +539,49 @@ app.get('/net-stats', (req, res) => {
   return forwardLibrary(req, res);
 });
 
+app.post('/collections/preview', forwardLibrary);
+
 app.post('/convert', (req, res) => {
   const { url = '', urls: rawUrls, format = 'mp3', bitrate = '160', spatial = false } = req.body || {};
   const urls = typeof rawUrls === 'string' ? [rawUrls] : (rawUrls || [url]);
   if (!Array.isArray(urls) || !urls.length || !urls.every(value => typeof value === 'string' && isSpotifyUrl(value))) {
     return res.status(400).json({ error: 'Paste a valid Spotify playlist, album, or track link.' });
   }
+  if (urls.length > 5) return res.status(400).json({ error: 'You can queue up to 5 links at a time.' });
+  const canonical = urls.map(canonicalSpotifyUrl);
+  if (new Set(canonical).size !== canonical.length) return res.status(400).json({ error: 'This link is already in the queue.' });
   if (!FORMATS.has(format) || !BITRATES[bitrate]) return res.status(400).json({ error: 'Choose a supported file format and bitrate.' });
   if (!FFMPEG) return res.status(500).json({ error: 'FFmpeg is required. Install it and add it to PATH.' });
 
-  const jobId = uuidv4().replace(/-/g, '');
-  const type = urls.length === 1 ? linkType(urls[0]) : 'playlist';
-  JOBS.set(jobId, {
-    state: 'converting', tracks: [], total: 0, completed: 0,
-    format, bitrate, spatial: !!spatial, link_type: type, sseClients: new Set(),
-    jobDir: null, outputDir: null, filePath: null, archivePath: null, trackNames: [],
+  const batchId = uuidv4().replace(/-/g, '');
+  const hints = Array.isArray(req.body.collections) ? req.body.collections : [];
+  const jobs = canonical.map((url, position) => {
+    const jobId = uuidv4().replace(/-/g, '');
+    const hint = hints.find(item => item && item.url === url);
+    const job = { state: 'queued', tracks: [], total: 0, completed: 0, format, bitrate, spatial: !!spatial,
+      link_type: linkType(url), urls: [url], name: String(hint?.name || '').slice(0, 300),
+      batch_id: batchId, batch_position: position, sseClients: new Set(),
+      jobDir: null, outputDir: null, filePath: null, archivePath: null, trackNames: [] };
+    JOBS.set(jobId, job);
+    return { job_id: jobId, ...publicJob(job) };
   });
+  enqueueConversions(jobs.map(job => ({ jobId: job.job_id, retryIndices: null })));
+  res.json({ job_id: jobs[0].job_id, jobs, batch_id: batchId });
+});
 
-  runJob(jobId, urls.map(value => value.trim()), format, BITRATES[bitrate], type);
-  res.json({ job_id: jobId });
+app.post('/convert/:jobId/retry', (req, res) => {
+  const job = JOBS.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found.' });
+  if (!['complete', 'error'].includes(job.state)) return res.status(409).json({ error: 'Wait until all tracks finish before retrying.' });
+  const failed = job.tracks.flatMap((track, index) => track.state === 'error' ? [index] : []);
+  const indices = req.body?.indices ?? failed;
+  if (!Array.isArray(indices) || !indices.length || indices.some(index => !Number.isInteger(index) || !failed.includes(index)) ||
+      new Set(indices).size !== indices.length) return res.status(400).json({ error: 'Choose failed tracks to retry.' });
+  if (!job.jobDir || !fs.existsSync(job.jobDir)) return res.status(409).json({ error: 'This job is no longer available. Add its link again.' });
+  job.state = 'queued';
+  broadcast(req.params.jobId, { type: 'state', state: 'queued' });
+  enqueueConversions([{ jobId: req.params.jobId, retryIndices: indices }]);
+  res.status(202).json({ job_id: req.params.jobId, state: 'queued' });
 });
 
 // SSE status stream
@@ -530,7 +595,7 @@ app.get('/convert/:jobId/events', (req, res) => {
   res.flushHeaders();
 
   // send current state immediately
-  res.write(`data: ${JSON.stringify({ type: 'snapshot', state: job.state, tracks: job.tracks, total: job.total, completed: job.completed, link_type: job.link_type, error: job.error, timings: job.timings, cached_tracks: job.cached_tracks, metadata_loading: job.metadata_loading, metadata_errors: job.metadata_errors, archive_name: job.archive_name })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: 'snapshot', ...publicJob(job) })}\n\n`);
 
   job.sseClients.add(res);
   req.on('close', () => job.sseClients.delete(res));
@@ -540,13 +605,11 @@ app.get('/convert/:jobId/events', (req, res) => {
 app.get('/convert/:jobId/status', (req, res) => {
   const job = JOBS.get(req.params.jobId);
   if (!job) return res.status(404).json({ error: 'Job not found.' });
-  res.json({ state: job.state, tracks: job.tracks, total: job.total, completed: job.completed, error: job.error, link_type: job.link_type, timings: job.timings, cached_tracks: job.cached_tracks, metadata_loading: job.metadata_loading, metadata_errors: job.metadata_errors, archive_name: job.archive_name });
+  res.json(publicJob(job));
 });
 
 app.get('/jobs', (req, res) => {
-  res.json([...JOBS.entries()].filter(([, job]) => !['complete', 'error'].includes(job.state))
-    .map(([job_id, job]) => ({ job_id, state: job.state, tracks: job.tracks,
-      total: job.total, completed: job.completed, link_type: job.link_type })));
+  res.json([...JOBS.entries()].map(([job_id, job]) => ({ job_id, ...publicJob(job) })));
 });
 
 app.post('/convert/:jobId/tracks/:index/cancel', (req, res) => {
@@ -566,11 +629,13 @@ app.get('/convert/:jobId/download', (req, res) => {
   const filePath = job.filePath || job.archivePath;
   const name = path.basename(filePath);
   const mime = job.filePath ? 'audio/*' : 'application/zip';
+  const retain = job.tracks.some(track => track.state === 'error');
 
   res.setHeader('X-Download-Name', encodeURIComponent(name));
   res.setHeader('X-Converted-Tracks', JSON.stringify(job.trackNames).replace(/[\u007f-\uffff]/g,
     char => '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0')));
   res.download(filePath, name, { headers: { 'Content-Type': mime } }, () => {
+    if (retain || job.state !== 'complete') return;
     try { fs.rmSync(job.jobDir, { recursive: true, force: true }); } catch {}
     JOBS.delete(req.params.jobId);
   });
@@ -665,6 +730,12 @@ async function forwardLibrary(req, res) {
 }
 
 app.get('/library', (req, res) => res.sendFile(path.join(__dirname, 'templates', 'library.html')));
+app.delete('/library/cache', forwardLibrary);
+app.get('/health', (_req, res) => res.json({ app: 'spotibai', protocol: 1, backend: 'node', pid: process.pid }));
+app.get('/library/collections', forwardLibrary);
+app.get('/library/readiness', forwardLibrary);
+app.post('/library/readiness', forwardLibrary);
+app.delete('/library/readiness', forwardLibrary);
 app.get('/library/tracks', forwardLibrary);
 app.post('/library/tracks/:trackId/separate', forwardLibrary);
 app.get('/library/tracks/:trackId/separate/:sepId/status', forwardLibrary);

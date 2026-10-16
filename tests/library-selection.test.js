@@ -24,6 +24,33 @@ const checkboxes = fixture => fixture.body.querySelectorAll('.lib-select-checkbo
 const deletes = fixture => fixture.requests.filter(request => request.options?.method === 'DELETE');
 const clickCard = (fixture, card) => fixture.elements.get('#lib-grid').listeners.get('click')({ target: card });
 
+test('Library cache clearing requires confirmation and keeps all original cards', async () => {
+  const fixture = await library(() => Response.json({ ok: true, removed_files: 7 }));
+  fixture.context.confirm = () => false;
+  assert.equal(await fixture.context.clearLibraryCache(), false);
+  assert.equal(deletes(fixture).length, 0);
+  fixture.context.confirm = message => { fixture.confirmations.push(message); return true; };
+  assert.equal(await fixture.context.clearLibraryCache(), true);
+  assert.deepEqual(deletes(fixture).map(request => request.url), ['/library/cache']);
+  assert.match(fixture.confirmations[0], /Original library tracks will be kept/);
+  assert.match(fixture.confirmations[0], /prepared again/);
+  assert.equal(cards(fixture).length, 4);
+  assert.equal(fixture.elements.get('#lib-clear-cache').disabled, false);
+});
+
+test('a busy cache response remains retryable and duplicate cache clearing is blocked', async () => {
+  let release;
+  const fixture = await library(() => new Promise(resolve => { release = resolve; }));
+  const first = fixture.context.clearLibraryCache();
+  assert.equal(await fixture.context.clearLibraryCache(), false);
+  assert.equal(deletes(fixture).length, 1);
+  release(Response.json({ error: 'Separation is running' }, { status: 409 }));
+  assert.equal(await first, false);
+  assert.equal(cards(fixture).length, 4);
+  assert.equal(fixture.elements.get('#lib-clear-cache').disabled, false);
+  assert.ok(fixture.find('.sep-toast').classList.contains('sep-toast--error'));
+});
+
 test('clicking a card reveals checkboxes, selects that track, and does not remove anything', async () => {
   const fixture = await library();
   assert.ok(checkboxes(fixture).every(checkbox => checkbox.hidden));

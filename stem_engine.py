@@ -190,6 +190,17 @@ class StemService:
                 prepared = {stem: ready_stem(source, stem, fmt, bitrate) for stem in STEMS}
                 needed = [stem for stem in STEMS if prepared[stem] is None]
                 if needed:
+                    # A track may have waited in the queue while other apps used RAM.
+                    from stem_readiness import READINESS
+                    from mutagen import File as MutagenFile
+                    try:
+                        audio = MutagenFile(source)
+                        duration = float(audio.info.length) if audio and audio.info else 600
+                    except Exception:
+                        duration = 600
+                    problem = READINESS.check(duration, self.separator is not None)
+                    if problem:
+                        raise RuntimeError(problem)
                     self._update(job_id, pct=3, msg="Loading the separation model" if self.separator is None else "Reading audio")
                     samples, samplerate = self._infer(source, lambda pct, msg: self._update(job_id, pct=pct, msg=msg), ffmpeg)
                     self._update(job_id, pct=82, msg="Encoding vocals and instrumental")

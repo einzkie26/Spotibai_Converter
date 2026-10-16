@@ -58,6 +58,7 @@ function page(settings = {}) {
   const documentListeners = new Map();
   const actions = [];
   const downloads = [];
+  const confirmations = [];
   const document = {
     documentElement: new Element(),
     querySelector(selector) {
@@ -76,6 +77,8 @@ function page(settings = {}) {
   };
   const context = vm.createContext({
     document, URL, performance, console, NetworkStats: { create: () => network },
+    AbortController, setTimeout, clearTimeout,
+    confirm(message) { confirmations.push(message); return settings.confirm !== false; },
     Downloads: { createToast: title => ({ title }), download: async (url, options) => { downloads.push({ url, options }); } },
     localStorage: { getItem() { return null; }, setItem() {} },
     matchMedia: () => ({ matches: false }),
@@ -88,19 +91,28 @@ function page(settings = {}) {
     async fetch(url, options) {
       if (url === '/jobs') return { json: async () => settings.jobs || [] };
       if (url === '/convert') {
-        requests.push(JSON.parse(options.body));
-        return { ok: true, json: async () => ({ job_id: `job-${requests.length}` }) };
+        const body = JSON.parse(options.body);
+        requests.push(body);
+        if (settings.submitError) return { ok: false, json: async () => ({ error: settings.submitError }) };
+        const jobs = body.urls.map((url, index) => ({ job_id: `job-${index + 1}`, urls: [url], state: 'queued',
+          name: body.collections?.[index]?.name, link_type: body.collections?.[index]?.type }));
+        return { ok: true, json: async () => ({ job_id: jobs[0].job_id, jobs }) };
+      }
+      if (url === '/collections/preview') {
+        const link = JSON.parse(options.body).url;
+        const data = settings.preview ? await settings.preview(link) : { name: 'Verified album', total: 14 };
+        return { ok: !data.error, json: async () => data };
       }
       actions.push({ url, options });
-      return { json: async () => ({}) };
+      return { ok: true, json: async () => ({}) };
     },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), 'utf8') +
-    '\nglobalThis.api = { panels, queue, startJob, spotifyLinkType, isSpotifyUrl, buildCard, doZipDownload };', context);
+    '\nglobalThis.api = { panels, queue, startJob, spotifyLinkType, isSpotifyUrl, buildCard, doZipDownload, previewLink, retryFailed, collectionKeys, switchTab };', context);
   if (!settings.realRendering) context.renderTracks = (tracks, panel) => rendered.push({ tracks, panel });
   elements.get('#format-select').value = 'mp3';
   elements.get('#bitrate-select').value = '160';
-  return { ...context.api, elements, rendered, requests, streams, network, documentListeners, actions, downloads };
+  return { ...context.api, elements, rendered, requests, streams, network, documentListeners, actions, downloads, confirmations };
 }
 
 const tracks = [1, 2, 3].map(number => ({ title: `Song ${number}`, artist: 'Artist',
@@ -123,8 +135,10 @@ test('network monitoring survives form re-enabling and follows all active jobs t
   const fixture = page();
   fixture.queue.push({ url: 'https://open.spotify.com/album/Album123', type: 'album' });
   await fixture.elements.get('#convert-form').listeners.get('submit')({ preventDefault() {} });
-  assert.equal(fixture.elements.get('#submit-button').disabled, false);
+  assert.equal(fixture.elements.get('#submit-button').disabled, true, 'A running batch cannot be submitted twice');
+  assert.equal(fixture.elements.get('#spotify-url').disabled, false);
   assert.equal(fixture.network.active, true, 'A posted job is still running after the form is re-enabled');
+  fixture.streams[0].onmessage({ data: JSON.stringify({ type: 'snapshot', state: 'metadata', tracks: [] }) });
   assert.equal(fixture.network.phase, 'Metadata');
   fixture.startJob('second-job', 'track');
   fixture.streams[0].onmessage({ data: JSON.stringify({ type: 'tracks', state: 'processing', tracks: [{ state: 'downloading' }] }) });
@@ -166,6 +180,7 @@ test('mixed preparation and conversion states are shown while metadata still loa
 
 test('each active track has a stage label, detail, timer, and skip control', () => {
   const fixture = page();
+  fixture.startJob('album-job', 'playlist');
   const labels = { preparing: 'Preparing', downloading: 'Downloading', converting: 'Converting',
     retrying: 'Retrying source', finishing: 'Finishing' };
   for (const [state, label] of Object.entries(labels)) {
@@ -222,7 +237,7 @@ test('a partial album explains the failed song and retains the real total', () =
   assert.equal(fixture.panels.playlist.count.textContent, '2 of 3 tracks');
 });
 
-test('automatic retries move above finished cards without changing download identities', async () => {
+test('manually retried tracks move above finished cards without changing download identities', async () => {
   const fixture = page({ realRendering: true });
   fixture.startJob('album-job', 'playlist');
   const update = tracks => fixture.streams[0].onmessage({ data: JSON.stringify({
@@ -298,16 +313,105 @@ test('completion shows the measured duration when the backend provides it', () =
   assert.match(fixture.panels.playlist.eta.textContent, /42/);
 });
 
-test('multiple queued albums share a job so the panel cannot replace earlier tracks', async () => {
+test('queued links get separate named carousel panels in their original order', async () => {
   const fixture = page();
   const albumUrls = ['https://open.spotify.com/album/Album1', 'https://open.spotify.com/album/Album2'];
   fixture.queue.push(...albumUrls.map(url => ({ url, type: 'album' })),
     { url: 'https://open.spotify.com/track/Track1', type: 'track' });
   await fixture.elements.get('#convert-form').listeners.get('submit')({ preventDefault() {} });
-  assert.equal(fixture.requests.length, 2);
-  assert.deepEqual(fixture.requests.find(request => request.urls.length === 2).urls, albumUrls);
-  assert.equal(fixture.streams.length, 2);
+  assert.equal(fixture.requests.length, 1);
+  assert.deepEqual(fixture.requests[0].urls, [...albumUrls, 'https://open.spotify.com/track/Track1']);
+  assert.equal(fixture.streams.length, 3);
+  assert.equal(fixture.collectionKeys.length, 3);
+  assert.equal(fixture.panels['job-1'].panel.hidden, false);
+  assert.equal(fixture.panels['job-2'].panel.hidden, true);
+  assert.match(fixture.panels['job-2'].label.textContent, /Waiting/);
+  fixture.elements.get('#collection-next').listeners.get('click')();
+  assert.equal(fixture.panels['job-2'].panel.hidden, false);
+  assert.equal(fixture.panels['job-1'].panel.hidden, true);
+  assert.equal(fixture.elements.get('#collection-position').textContent, '2 of 3');
   assert.equal(fixture.queue.length, 0);
+});
+
+test('verified collection names appear before adding and queues stop at five links', async () => {
+  const fixture = page();
+  for (let i = 0; i < 5; i++) {
+    fixture.elements.get('#spotify-url').value = `https://open.spotify.com/album/Album${i}?si=shared`;
+    await fixture.previewLink();
+    assert.equal(fixture.elements.get('#link-preview-name').textContent, 'Verified album');
+    fixture.elements.get('#add-queue-btn').listeners.get('click')();
+  }
+  assert.equal(fixture.queue.length, 5);
+  assert.equal(fixture.elements.get('#queue-count').textContent, '5 / 5 links');
+  assert.equal(fixture.elements.get('#add-queue-btn').disabled, true);
+  fixture.elements.get('#add-queue-btn').listeners.get('click')();
+  assert.equal(fixture.queue.length, 5);
+  assert.match(fixture.elements.get('#message').textContent, /up to 5/);
+  assert.ok(fixture.queue.every(item => item.name === 'Verified album' && !item.url.includes('?')));
+});
+
+test('a playlist with 200 tracks warns before adding and respects cancellation', async () => {
+  const settings = { confirm: false, preview: async () => ({ name: 'Big playlist', total: 200 }) };
+  const fixture = page(settings);
+  fixture.elements.get('#spotify-url').value = 'https://open.spotify.com/playlist/Large123';
+  await fixture.previewLink();
+  assert.equal(fixture.elements.get('#link-preview-warning').hidden, false);
+  fixture.elements.get('#add-queue-btn').listeners.get('click')();
+  assert.equal(fixture.queue.length, 0);
+  assert.match(fixture.confirmations[0], /200 tracks/);
+  settings.confirm = true;
+  fixture.elements.get('#add-queue-btn').listeners.get('click')();
+  assert.equal(fixture.queue.length, 1);
+});
+
+test('a late preview cannot add the wrong collection and duplicate share links are rejected', async () => {
+  const pending = new Map();
+  const fixture = page({ preview: link => new Promise(resolve => pending.set(link, resolve)) });
+  const first = 'https://open.spotify.com/album/First';
+  const second = 'https://open.spotify.com/album/Second';
+  fixture.elements.get('#spotify-url').value = first;
+  const readFirst = fixture.previewLink();
+  fixture.elements.get('#spotify-url').value = second;
+  const readSecond = fixture.previewLink();
+  pending.get(second)({ name: 'Second album', total: 3 }); await readSecond;
+  pending.get(first)({ name: 'Wrong old album', total: 2 }); await readFirst;
+  assert.equal(fixture.elements.get('#link-preview-name').textContent, 'Second album');
+  fixture.elements.get('#add-queue-btn').listeners.get('click')();
+  assert.equal(fixture.queue[0].url, second);
+  fixture.elements.get('#spotify-url').value = second + '?si=anotherShare';
+  const duplicate = fixture.previewLink();
+  pending.get(second + '?si=anotherShare')({ name: 'Second album', total: 3 }); await duplicate;
+  fixture.elements.get('#add-queue-btn').listeners.get('click')();
+  assert.equal(fixture.queue.length, 1);
+});
+
+test('failed tracks wait for a manual click after all tracks settle', async () => {
+  const fixture = page({ realRendering: true });
+  fixture.startJob('album-job', 'album-job', { name: 'Album one', link_type: 'album' });
+  const failed = tracks.map((track, index) => ({ ...track, state: index === 1 ? 'error' : 'converted', error: index === 1 ? 'Source unavailable' : '' }));
+  fixture.streams[0].onmessage({ data: JSON.stringify({ type: 'tracks', state: 'processing', total: 3, completed: 2, tracks: failed }) });
+  const p = fixture.panels['album-job'];
+  assert.equal(p.retryBtn.disabled, true);
+  assert.equal(p.list.querySelector('.retry-track').disabled, true);
+  assert.equal(fixture.actions.length, 0);
+  fixture.streams[0].onmessage({ data: JSON.stringify({ type: 'complete', total: 3, completed: 2, tracks: failed }) });
+  assert.equal(p.retryBtn.disabled, false);
+  const retry = p.list.querySelector('.retry-track');
+  assert.equal(retry.disabled, false);
+  await fixture.documentListeners.get('click')({ target: retry });
+  assert.equal(fixture.actions[0].url, '/convert/album-job/retry');
+  assert.deepEqual(JSON.parse(fixture.actions[0].options.body).indices, [1]);
+  assert.equal(p.status.state, 'queued');
+  assert.equal(fixture.streams.length, 2);
+});
+
+test('a failed submission preserves all verified queue entries', async () => {
+  const fixture = page({ submitError: 'Server unavailable' });
+  fixture.queue.push({ url: 'https://open.spotify.com/album/Album1', type: 'album', name: 'Album one', total: 14 });
+  await fixture.elements.get('#convert-form').listeners.get('submit')({ preventDefault() {} });
+  assert.equal(fixture.queue.length, 1);
+  assert.equal(fixture.elements.get('#message').textContent, 'Server unavailable');
+  assert.equal(fixture.elements.get('#submit-button').disabled, false);
 });
 
 test('shared album links retain their type and invalid album paths are rejected', () => {

@@ -1,0 +1,2 @@
+# Packaging tools only; audio/runtime packages stay in requirements.txt.
+PyInstaller>=6.16,<7

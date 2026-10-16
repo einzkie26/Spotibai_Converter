@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 import app
 from stem_engine import StemService, ready_stem, stem_path
+from stem_engine import cache_folder
+from preview_engine import preview_key
 
 
 def audio_file(path, frames=800):
@@ -34,7 +36,8 @@ class LibraryStemTests(unittest.TestCase):
                         patch.object(app, "STEM_SERVICE", self.service),
                         patch.object(app, "find_ffmpeg", return_value=Path("ffmpeg")),
                         patch.object(self.service, "_infer", side_effect=self.infer),
-                        patch.object(self.service, "_encode", side_effect=self.encode)]
+                        patch.object(self.service, "_encode", side_effect=self.encode),
+                        patch.object(app.READINESS, "check", return_value=None)]
         self.mocks = [item.start() for item in self.patches]
         self.source = self.root / "source.wav"
         audio_file(self.source)
@@ -56,6 +59,97 @@ class LibraryStemTests(unittest.TestCase):
             raise RuntimeError("Test separation stalled")
         progress(50, "Separating audio")
         return {"vocals": None, "instrumental": None}, 8000
+
+    def test_clear_library_cache_removes_legacy_and_hidden_stems_but_keeps_originals(self):
+        original = self.source.read_bytes()
+        folder = cache_folder(self.source)
+        folder.mkdir(parents=True)
+        audio_file(folder / "cached vocals.wav")
+        nested = folder / ".preview-cache"
+        nested.mkdir()
+        (nested / "preview.mp3").write_bytes(b"generated preview")
+        legacy = self.library / (self.source.stem + " (Instrumental).wav")
+        audio_file(legacy)
+        preview = self.library / ".preview-cache"
+        preview.mkdir()
+        (preview / "old.mp3").write_bytes(b"generated preview")
+        # A registered original may itself have a stem-like title.
+        app.library_save({"title": "A Song (Vocals)", "artist": "Artist", "album": "Album"}, self.source, "wav", "160k")
+        protected = self.library / "Artist - A Song (Vocals).wav"
+        with app.app.test_client() as client:
+            response = client.delete("/library/cache")
+            self.assertEqual(response.status_code, 200, response.json)
+            self.assertEqual(response.json["removed_files"], 4)
+            self.assertEqual(client.get(f"/library/tracks/{self.track_id}/download?stem=vocals").status_code, 409)
+        self.assertEqual(self.source.read_bytes(), original)
+        self.assertTrue(protected.is_file())
+        self.assertFalse(folder.exists())
+        self.assertFalse(legacy.exists())
+        self.assertFalse(preview.exists())
+        with closing(app._db()) as con:
+            self.assertEqual(con.execute("SELECT count(*) FROM tracks").fetchone()[0], 2)
+
+    def test_clear_cache_waits_for_active_separation(self):
+        folder = cache_folder(self.source)
+        folder.mkdir(parents=True)
+        cached = folder / "vocals.wav"
+        audio_file(cached)
+        self.service.jobs["busy"] = {"track_id": self.track_id, "state": "running"}
+        with app.app.test_client() as client:
+            response = client.delete("/library/cache")
+            self.assertEqual(response.status_code, 409)
+            self.assertIn("finish", response.json["error"])
+        self.assertTrue(cached.exists())
+
+    def test_unprepared_stems_require_readiness_but_originals_remain_available(self):
+        with patch.object(app.READINESS, "check", return_value="Run the CPU & RAM test first."), app.app.test_client() as client:
+            result = client.post(f"/library/tracks/{self.track_id}/separate", json={"stem": "vocals"})
+            self.assertEqual(result.status_code, 428)
+            self.assertTrue(result.json["readiness_required"])
+            original = client.get(f"/library/tracks/{self.track_id}/download")
+            self.assertEqual(original.status_code, 200)
+            original.close()
+        self.assertEqual(self.service.jobs, {})
+
+    def test_cached_stems_bypass_a_new_trial(self):
+        self.wait(self.start())
+        with patch.object(app.READINESS, "check", return_value="Trial required") as check:
+            self.assertEqual(self.wait(self.start())["state"], "done")
+            check.assert_not_called()
+
+    def test_hardware_trial_waits_for_stem_jobs(self):
+        self.service.jobs["busy"] = {"track_id": self.track_id, "state": "running"}
+        with patch.object(app.READINESS, "start") as start, app.app.test_client() as client:
+            self.assertEqual(client.post("/library/readiness").status_code, 409)
+            start.assert_not_called()
+
+    def test_queued_work_rechecks_ram_before_loading_the_model(self):
+        with patch.object(app.READINESS, "check", side_effect=[None, "Available RAM changed; close other apps."]):
+            result = self.wait(self.start())
+        self.assertEqual(result["state"], "error")
+        self.assertIn("RAM changed", result["msg"])
+        self.mocks[4].assert_not_called()
+
+    def test_removing_track_also_removes_its_prepared_audio_and_previews(self):
+        folder = cache_folder(self.source)
+        folder.mkdir(parents=True)
+        audio_file(folder / "vocals.wav")
+        legacy = self.library / (self.source.stem + " (Vocals).wav")
+        audio_file(legacy)
+        preview = self.library / ".preview-cache"
+        preview.mkdir()
+        clip = preview / (preview_key(self.source) + ".mp3")
+        clip.write_bytes(b"generated preview")
+        keep = preview / "another-track.mp3"
+        keep.write_bytes(b"another preview")
+        with app.app.test_client() as client:
+            response = client.delete(f"/library/tracks/{self.track_id}")
+            self.assertEqual(response.status_code, 200, response.json)
+        self.assertFalse(self.source.exists())
+        self.assertFalse(folder.exists())
+        self.assertFalse(legacy.exists())
+        self.assertFalse(clip.exists())
+        self.assertTrue(keep.exists())
 
     def encode(self, samples, samplerate, target, fmt, bitrate, ffmpeg):
         audio_file(target)

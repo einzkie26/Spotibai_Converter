@@ -6,6 +6,12 @@ __pycache__/
 *.pyc
 .env
 .kiro/
+dist/
+build_exe.py
+build-exe.cmd
+build-exe.ps1
 setup.ps1
 start.ps1
+Start Spotibai.cmd
 install.cmd
+launch.ps1

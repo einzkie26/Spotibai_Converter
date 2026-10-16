@@ -31,10 +31,13 @@ const selectAllButton = document.querySelector('#lib-select-all');
 const cancelSelectionButton = document.querySelector('#lib-selection-cancel');
 const removeSelectedButton = document.querySelector('#lib-remove-selected');
 const selectionHint = document.querySelector('#lib-selection-hint');
+const clearCacheButton = document.querySelector('#lib-clear-cache');
+let clearingCache = false;
 const selectedTrackIds = new Set();
 let selectionMode = false;
 let removingTracks = false;
 let libraryRequest = 0;
+let activeShelf = '';
 
 const previewBar      = document.querySelector('#preview-bar');
 const previewAudio    = document.querySelector('#preview-audio');
@@ -112,7 +115,8 @@ function libraryMenu(track, kind) {
 async function load(q = '') {
   const generation = ++libraryRequest;
   const url = q ? `/library/tracks?q=${encodeURIComponent(q)}` : '/library/tracks';
-  const tracks = await fetch(url).then(r => r.json()).catch(() => []);
+  const shelfUrl = activeShelf ? `${url}${q ? '&' : '?'}collection_id=${encodeURIComponent(activeShelf)}` : url;
+  const tracks = await fetch(shelfUrl).then(r => { if (!r.ok) throw new Error('Library unavailable'); return r.json(); }).catch(() => []);
   if (generation === libraryRequest) render(tracks);
 }
 
@@ -281,6 +285,7 @@ async function removeSelectedTracks() {
     countEl.textContent = remaining ? `${remaining} track${remaining === 1 ? '' : 's'}` : '';
     empty.hidden = remaining > 0;
     syncSelection();
+    loadShelves();
   }
 }
 
@@ -360,6 +365,31 @@ grid.addEventListener('keydown', event => {
 const activeDownloads = new Map();
 const activePreparations = new Map();
 
+async function clearLibraryCache() {
+  if (clearingCache || removingTracks) return false;
+  if (!confirm('Clear cached vocals, instrumentals, and preview clips? Original library tracks will be kept. Stems will need to be prepared again before playback or download.')) return false;
+  const toast = Downloads.createToast('Library cache');
+  if (activeDownloads.size || activePreparations.size) {
+    toast.finish(false, 'Wait for current preparation and downloads to finish, then clear the cache.');
+    return false;
+  }
+  clearingCache = true;
+  clearCacheButton.disabled = true;
+  clearCacheButton.textContent = 'Clearing cache…';
+  stopPreview();
+  closeLibraryMenus();
+  try {
+    toast.setStatus('Removing cached stems and previews');
+    const response = await fetch('/library/cache', { method: 'DELETE' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'The cache could not be cleared.');
+    toast.finish(true, `Cleared ${data.removed_files} cached file${data.removed_files === 1 ? '' : 's'}. Original tracks are kept.`);
+    return true;
+  } catch (error) { toast.finish(false, error.message); return false; }
+  finally { clearingCache = false; clearCacheButton.disabled = false; clearCacheButton.textContent = 'Clear stem & preview cache'; }
+}
+clearCacheButton.addEventListener('click', clearLibraryCache);
+
 function prepareStem(id, stem, onProgress) {
   const key = `${id}:${stem}`;
   let preparation = activePreparations.get(key);
@@ -374,7 +404,14 @@ function prepareStem(id, stem, onProgress) {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stem }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Separation could not be started.');
+      if (!response.ok) {
+        if (data.readiness_required) {
+          document.querySelector('#lib-readiness')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+          document.querySelector('#readiness-run')?.focus();
+          refreshReadiness();
+        }
+        throw new Error(data.error || 'Separation could not be started.');
+      }
       await waitForSeparation(id, data.sep_id, notify);
     })().finally(() => activePreparations.delete(key));
     activePreparations.set(key, preparation);
@@ -619,4 +656,97 @@ previewAudio.addEventListener('ended', () => {
 previewClose.addEventListener('click', stopPreview);
 
 // ── init ───────────────────────────────────────────────────────────────────
+async function loadShelves() {
+  const shelves = document.querySelector('#lib-shelves');
+  if (!shelves) return;
+  try {
+    const response = await fetch('/library/collections');
+    if (!response.ok) throw new Error('Shelves unavailable');
+    const data = await response.json();
+    shelves.replaceChildren();
+    const add = (id, name, detail, cover = '') => {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'lib-shelf'; button.dataset.shelf = id;
+      button.setAttribute('aria-pressed', String(activeShelf === id));
+      if (cover) {
+        const img = document.createElement('img'); img.src = cover; img.alt = ''; img.loading = 'lazy'; button.append(img);
+      } else {
+        const icon = document.createElement('span'); icon.className = 'lib-shelf-art'; icon.textContent = name[0]; button.append(icon);
+      }
+      const label = document.createElement('strong'); label.textContent = name;
+      const note = document.createElement('span'); note.textContent = detail;
+      button.append(label, note);
+      button.addEventListener('click', () => {
+        if (removingTracks) return;
+        activeShelf = id; clearSelection(); closeLibraryMenus();
+        document.querySelector('#lib-shelf-title').textContent = name;
+        shelves.querySelectorAll('.lib-shelf').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+        load(searchInput.value.trim());
+      });
+      shelves.append(button);
+    };
+    add('', 'All tracks', `${data.total_tracks} saved tracks`);
+    if (data.unfiled_tracks) add('unfiled', 'Earlier downloads', `${data.unfiled_tracks} track${data.unfiled_tracks === 1 ? '' : 's'} without a collection`);
+    for (const shelf of data.collections) {
+      const state = shelf.complete ? 'Complete' : `${shelf.saved_entries} of ${shelf.expected_total} entries saved`;
+      add(String(shelf.id), shelf.name, `${shelf.kind === 'album' ? 'Album' : 'Playlist'} · ${state} · ${shelf.saved_tracks} tracks`, shelf.cover_url);
+    }
+    if (data.unfiled_tracks) document.querySelector('#lib-shelves-note').textContent =
+      'Earlier downloads have no saved collection link. Convert the original playlist or album again to create its shelf.';
+  } catch { /* Tracks remain usable while collection information is unavailable. */ }
+}
+
+let readinessTimer;
+let readinessBusy = false;
+function showReadiness(data) {
+  const run = document.querySelector('#readiness-run');
+  if (!run) return;
+  const running = data.state === 'running';
+  run.disabled = running || readinessBusy;
+  run.textContent = data.ready ? 'Run test again' : 'Run CPU & RAM test';
+  document.querySelector('#readiness-cancel').hidden = !running;
+  const progress = document.querySelector('#readiness-progress');
+  progress.hidden = !running;
+  if (data.pct == null) progress.removeAttribute('value'); else progress.value = data.pct;
+  document.querySelector('#readiness-status').textContent = data.msg || 'Run the test before preparing new vocals or instrumentals.';
+  const hw = data.hardware || {};
+  document.querySelector('#readiness-hardware').textContent = hw.total_ram_gb == null ? '' :
+    `${hw.physical_cores} CPU cores · ${hw.total_ram_gb.toFixed(1)} GB RAM · ${hw.available_ram_gb.toFixed(1)} GB available now`;
+  const result = data.measurement;
+  document.querySelector('#readiness-result').textContent = result ?
+    `8-second sample: ${result.wall_seconds.toFixed(1)}s elapsed, ${result.cpu_seconds.toFixed(1)} CPU seconds, ${result.peak_ram_gb.toFixed(2)} GB peak process RAM. Rough estimate per minute of audio: ${Math.round(result.seconds_per_minute * 0.7)}–${Math.round(result.seconds_per_minute * 1.6)} seconds, plus loading/export. Song complexity and other apps affect the result.` : '';
+  clearTimeout(readinessTimer);
+  if (running) readinessTimer = setTimeout(refreshReadiness, 1000);
+}
+async function refreshReadiness() {
+  if (!document.querySelector('#readiness-run')) return;
+  try {
+    const response = await fetch('/library/readiness');
+    if (!response.ok) throw new Error('Could not check the hardware test.');
+    showReadiness(await response.json());
+  } catch {
+    document.querySelector('#readiness-status').textContent = 'Hardware test unavailable. Check that the app is running, then try again.';
+    document.querySelector('#readiness-run').disabled = false;
+  }
+}
+async function readinessAction(method) {
+  if (readinessBusy) return;
+  readinessBusy = true; document.querySelector('#readiness-run').disabled = true;
+  let success = false;
+  try {
+    const response = await fetch('/library/readiness', { method });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'The test could not be started.');
+    success = true;
+    showReadiness(data);
+  } catch (error) { document.querySelector('#readiness-status').textContent = error.message; }
+  finally {
+    readinessBusy = false;
+    if (success) await refreshReadiness(); else document.querySelector('#readiness-run').disabled = false;
+  }
+}
+document.querySelector('#readiness-run')?.addEventListener('click', () => readinessAction('POST'));
+document.querySelector('#readiness-cancel')?.addEventListener('click', () => readinessAction('DELETE'));
 load();
+loadShelves();
+refreshReadiness();

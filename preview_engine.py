@@ -13,12 +13,17 @@ from mutagen import File as MutagenFile
 from conversion_engine import usable_audio
 
 
+def preview_key(source: Path) -> str:
+    stat = source.stat()
+    return hashlib.sha256(json.dumps([
+        str(source.resolve()), stat.st_size, stat.st_mtime_ns, "mp3-128k-7s-offset30-v1",
+    ]).encode()).hexdigest()[:32]
+
+
 def preview_clip(source: Path, ffmpeg: Path) -> Path:
     stat = source.stat()
     signature = (stat.st_size, stat.st_mtime_ns)
-    key = hashlib.sha256(json.dumps([
-        str(source.resolve()), *signature, "mp3-128k-7s-offset30-v1",
-    ]).encode()).hexdigest()[:32]
+    key = preview_key(source)
     folder = source.parent / ".preview-cache"
     folder.mkdir(exist_ok=True)
     target = folder / f"{key}.mp3"

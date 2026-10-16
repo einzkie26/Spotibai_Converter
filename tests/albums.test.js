@@ -71,7 +71,7 @@ function backend(t, options = {}) {
           setImmediate(() => {
             if (options.statsError) { proc.emit('error', new Error('Network reader unavailable')); return; }
             proc.stdout.emit('data', JSON.stringify({ id: request.id, status: 200,
-              data: { bytes_sent: 123, bytes_recv: 4567, sampled_at: 12.5, scope: 'computer' } }) + '\n');
+              data: options.bridgeData || { bytes_sent: 123, bytes_recv: 4567, sampled_at: 12.5, scope: 'computer' } }) + '\n');
           });
           return true;
         }
@@ -158,6 +158,10 @@ test('Node playlist tracks preserve their individual album names and cover art f
   assert.deepEqual(Array.from(tracks, track => track.album), metadata.map(song => song.album_name));
   assert.deepEqual(Array.from(tracks, track => track.cover_url), metadata.map(song => song.cover_url));
   assert.deepEqual(Array.from(tracks, track => track.spotdl_data.album_name), metadata.map(song => song.album_name));
+  assert.equal(tracks[0].collection_url, 'https://open.spotify.com/playlist/Playlist123');
+  assert.equal(tracks[0].collection_kind, 'playlist');
+  assert.deepEqual(Array.from(tracks, track => track.collection_position), [1, 2, 3]);
+  assert.equal(tracks[0].collection_total, 3);
   assert.equal(tracks[2].title, '最后一首歌');
 });
 
@@ -201,14 +205,28 @@ test('Node keeps the real album count when one song fails', async t => {
   assert.equal(fixture.job.completed, 2);
   assert.equal(fixture.job.tracks[1].state, 'error');
   assert.match(fixture.job.tracks[1].error, /Audio source unavailable/);
-  assert.equal(fixture.job.tracks[1].retry_count, 1);
-  assert.deepEqual(fixture.downloads, [...songs.map(song => song.url), songs[1].url]);
+  assert.equal(fixture.job.tracks[1].retry_count, 0);
+  assert.deepEqual(fixture.downloads, songs.map(song => song.url));
 });
 
-test('Node retries failed preparation only after all other tracks finish and reuses the worker', async t => {
+test('Node keeps failures until manual retry and preserves successful tracks', async t => {
   const fixture = backend(t, { failOnceUrl: songs[1].url });
   await fixture.runJob('test-album', albumUrl, 'mp3', '160k', 'album');
   assert.equal(fixture.job.state, 'complete', fixture.job.error);
+  assert.equal(fixture.job.completed, 2);
+  assert.deepEqual(fixture.downloads, songs.map(song => song.url));
+  fixture.job.urls = [albumUrl];
+  const response = { status(code) { this.code = code; return this; }, json(data) { this.data = data; } };
+  fixture.handlers.get('POST /convert/:jobId/retry')({ params: { jobId: 'test-album' }, body: {} }, response);
+  assert.equal(response.code, 202);
+  const duplicate = { ...response, code: 200 };
+  fixture.handlers.get('POST /convert/:jobId/retry')({ params: { jobId: 'test-album' }, body: {} }, duplicate);
+  assert.equal(duplicate.code, 409);
+  const deadline = Date.now() + 5000;
+  while (!['complete', 'error'].includes(fixture.job.state)) {
+    assert.ok(Date.now() < deadline);
+    await new Promise(resolve => setImmediate(resolve));
+  }
   assert.equal(fixture.job.completed, 3);
   assert.deepEqual(fixture.downloads, [...songs.map(song => song.url), songs[1].url]);
   const retry = fixture.attemptSnapshots[3];
@@ -218,11 +236,11 @@ test('Node retries failed preparation only after all other tracks finish and reu
   assert.equal(retry.tracks[1].error, undefined);
   assert.equal(retry.tracks[1].progress_pct, 0);
   assert.match(retry.tracks[1].message, /again/);
-  assert.equal(fixture.processes.length, 1);
+  assert.equal(fixture.processes.length, 2, 'A manual retry starts one reusable worker for the failed songs');
   assert.deepEqual(Array.from(fixture.job.tracks, track => track.index), [0, 1, 2]);
 });
 
-test('Node excludes cancelled failures from the automatic retry pass', async t => {
+test('Node excludes cancelled failures from manual retry', async t => {
   const fixture = backend(t, { failUrl: songs[1].url, cancelFailedUrl: songs[1].url });
   await fixture.runJob('test-album', albumUrl, 'mp3', '160k', 'album');
   assert.equal(fixture.job.state, 'complete', fixture.job.error);
@@ -304,6 +322,54 @@ test('Node accepts the queued urls payload sent by the page', async t => {
   assert.equal(job.total, 3);
 });
 
+test('Node splits queued collections and does not prepare the next one before the first finishes', async t => {
+  let fixture;
+  let firstFinished = false;
+  fixture = backend(t, { beforeSecondAlbum(downloads) {
+    const jobs = [...fixture.JOBS.values()];
+    firstFinished = jobs[0].state === 'complete' && downloads.length === 3;
+  } });
+  fixture.JOBS.clear();
+  const response = { status(code) { this.code = code; return this; }, json(data) { this.data = data; } };
+  const urls = [albumUrl, 'https://open.spotify.com/playlist/Playlist456'];
+  fixture.handlers.get('POST /convert')({ body: { urls, collections: urls.map((url, index) => ({ url, name: `Collection ${index + 1}` })) } }, response);
+  assert.equal(response.data.jobs.length, 2);
+  assert.deepEqual(Array.from(response.data.jobs, job => job.batch_position), [0, 1]);
+  assert.equal(response.data.jobs[1].state, 'queued');
+  const deadline = Date.now() + 5000;
+  while ([...fixture.JOBS.values()].some(job => !['complete', 'error'].includes(job.state))) {
+    assert.ok(Date.now() < deadline);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.equal(firstFinished, true);
+  assert.ok([...fixture.JOBS.values()].every(job => job.total === 3 && job.completed === 3));
+  assert.equal(fixture.processes.length, 2);
+});
+
+test('Node rejects more than five links and equivalent duplicate share URLs', t => {
+  const fixture = backend(t);
+  const response = { status(code) { this.code = code; return this; }, json(data) { this.data = data; } };
+  const submit = fixture.handlers.get('POST /convert');
+  submit({ body: { urls: Array.from({ length: 6 }, (_, index) => `https://open.spotify.com/album/Album${index}`) } }, response);
+  assert.equal(response.code, 400);
+  assert.match(response.data.error, /5/);
+  submit({ body: { urls: [albumUrl, 'https://open.spotify.com/album/Album123?si=other'] } }, response);
+  assert.equal(response.code, 400);
+  assert.equal(fixture.processes.length, 0);
+});
+
+test('Node forwards preview and Library cache cleanup through the shared service', async t => {
+  const fixture = backend(t, { bridgeData: { name: 'Verified collection', total: 200, removed_files: 4 } });
+  const response = { status(code) { this.code = code; return this; }, json(data) { this.data = data; } };
+  await fixture.handlers.get('POST /collections/preview')({ method: 'POST', originalUrl: '/collections/preview',
+    body: { url: albumUrl } }, response);
+  assert.equal(response.data.name, 'Verified collection');
+  assert.equal(fixture.statsRequests[0].body.url, albumUrl);
+  await fixture.handlers.get('DELETE /library/cache')({ method: 'DELETE', originalUrl: '/library/cache' }, response);
+  assert.equal(response.data.removed_files, 4);
+  assert.equal(fixture.statsRequests[1].path, '/library/cache');
+});
+
 test('Node loads all queued albums into one job instead of replacing the list', async t => {
   const fixture = backend(t);
   await fixture.runJob('test-album', [albumUrl, 'https://open.spotify.com/album/Album456'], 'mp3', '160k', 'album');
@@ -359,4 +425,16 @@ test('Node download headers safely preserve non-Latin track names', async t => {
     download() {},
   });
   assert.ok(JSON.parse(headers['X-Converted-Tracks']).some(name => name.includes('最后一首歌')));
+});
+
+
+test('Node forwards collection shelves and all hardware test actions', async t => {
+  const fixture = backend(t, { bridgeData: { state: 'idle', collections: [] } });
+  for (const [method, url] of [['GET','/library/collections'], ['GET','/library/readiness'], ['POST','/library/readiness'], ['DELETE','/library/readiness']]) {
+    const response = { statusCode: 200, status(value) { this.statusCode=value; return this; }, setHeader() {}, json(value) { this.body=value; return this; } };
+    await fixture.handlers.get(`${method} ${url}`)({ method, originalUrl: url }, response);
+    assert.equal(response.statusCode, 200);
+    assert.equal(fixture.statsRequests.at(-1).path, url);
+    assert.equal(fixture.statsRequests.at(-1).method, method);
+  }
 });

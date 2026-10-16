@@ -1,85 +1,240 @@
-# Spotibai
+<h1 align="center">
+  <img src="docs/images/spotibai-banner.svg" alt="Spotibai — your local audio workspace" width="1120">
+</h1>
 
-A small local Flask app that accepts a Spotify playlist or album URL, uses spotDL and FFmpeg to create MP3 files, and returns one ZIP archive.
+<p align="center">
+  <strong>From a Spotify link to an organized local audio library.</strong><br>
+  Convert playlists, albums, and individual tracks. Follow each song's progress, save a named ZIP, and preview your music from the Library.
+</p>
 
-Albums and playlists add their tracks to a shared queue as the album metadata is parsed. Each song shows Queued, Preparing, Downloading, Converting, and Done, with separate retry and finishing states. Four workers run in parallel, so ready tracks can continue while others prepare or another queued album loads. Multiple albums stay together in the album panel.
+<p align="center">
+  <strong>Windows desktop setup</strong> &nbsp; · &nbsp; Python 3.11–3.13 &nbsp; · &nbsp; 5-link queue &nbsp; · &nbsp; Vocals &amp; instrumental
+</p>
 
-After all initial attempts finish, failed tracks automatically get one final preparation and conversion attempt using the same parallel workers. These tracks move above the completed cards, the panel scrolls to the top once, and an **Automatic retry** label identifies them. Successful tracks are kept and skipped tracks stay skipped. A track that still fails is reported while successful downloads remain available.
+<p align="center">
+  <a href="#quick-start">Get started</a> &nbsp; / &nbsp;
+  <a href="#convert-your-first-collection">Convert a collection</a> &nbsp; / &nbsp;
+  <a href="#your-library">Explore the Library</a> &nbsp; / &nbsp;
+  <a href="#build-a-windows-executable">Build an executable</a> &nbsp; / &nbsp;
+  <a href="docs/technical-reference.md">Technical reference</a>
+</p>
 
-The ZIP uses the Spotify playlist or album title, including Unicode names. Multiple collections in one job combine their distinct titles with ` + `. Characters unsupported in filenames are replaced and long names are shortened. Each song retains its original album name in its tags and Library entry.
+<p align="center">
+  <a href="docs/images/converter-overview.png">
+    <img src="docs/images/converter-overview.png" alt="Spotibai converter in dark mode, showing output settings and a completed album with a Download ZIP button" width="1120">
+  </a>
+  <br>
+  <sub>The converter brings link verification, output settings, and collection progress into one view. Select any screenshot to view it at full size.</sub>
+</p>
 
-Use this only for audio you own or are authorized to download. Spotify links are used for metadata; the app does not bypass Spotify access controls.
+## What you can do
 
-## Setup
+| Feature | How it helps |
+| :--- | :--- |
+| **Verified collection queue** | Check the collection name and track count before adding up to five links. Playlists with 200 or more tracks show a confirmation. |
+| **Progress for every song** | Follow Preparing, Downloading, Converting, and Finishing stages. Four workers process songs within the current collection. |
+| **Named ZIP downloads** | Download each collection under its playlist or album name, or save individual finished tracks. |
+| **Collection shelves** | Browse playlists and albums in the Library, see saved counts, and search within a selected shelf. |
+| **Preview and separated audio** | Listen to originals, vocals, or instrumentals. Prepare and download stems directly from the Library. |
+| **Guided desktop setup** | Check Python, install the audio requirements, and start the local app from one window. |
 
-1. Use Python 3.13 (Python 3.11-3.13 is supported), or install [uv](https://docs.astral.sh/uv/getting-started/installation/) to obtain it automatically.
-2. From the project folder, run:
+Spotify links provide metadata; spotDL locates audio sources and FFmpeg processes the output. Use Spotibai for music you own or have permission to download.
 
-   ```powershell
-   .\install.cmd
-   ```
+## Quick start
 
-   The setup script preserves a broken environment in `.venv-backup-*`, creates `.venv`, installs `requirements.txt`, and installs Node dependencies when Node is available. It installs FFmpeg and FFprobe into `.venv\Scripts` from the [Windows build provider linked by FFmpeg](https://ffmpeg.org/download.html); the app detects them automatically.
+### 1. Open the launcher
 
-3. Start the app without activating the environment:
+Choose the option that matches your copy of Spotibai:
 
-   ```powershell
-   .\.venv\Scripts\python.exe app.py
-   ```
+| You have | What to open |
+| :--- | :--- |
+| **A Windows ZIP package** | Extract the **entire ZIP** to a writable folder, then double-click **Spotibai.exe**. Keep the supporting files beside it. |
+| **The source project** | Open the project folder and double-click **Start Spotibai.cmd**. |
 
-4. Open http://127.0.0.1:5000.
+The packaged setup window opens without Python preinstalled. It guides you through installing the separate Python environment used by the audio engine.
 
-To use the Node backend, run `node server.js`; it uses the same `.venv` and bundled FFmpeg. Run one backend at a time because both use port 5000.
+### 2. Complete the three setup steps
 
-For a manual Python installation, create `.venv` with Python 3.13 and run `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`. The Python requirements include a fallback FFmpeg binary; install FFprobe as well for ALAC stem separation, or use the setup script to install both tools. Demucs supplies its compatible PyTorch dependency; its current inference runtime uses the included `sphn` audio library. No separate TorchAudio installation is required.
+| Step | In the setup window |
+| :---: | :--- |
+| **01 · Python** | Let the launcher check your installation. If needed, choose **Install Python** and complete the guided installation. |
+| **02 · Requirements** | Choose **Install or repair requirements**. Keep the window open while it prepares the Python packages, FFmpeg, and FFprobe. |
+| **03 · Local app** | Choose **Start app**. Your browser opens when the local server is ready. |
 
-### If pip reports no matching spotDL distribution
+First-time installation needs internet and can take several minutes. If setup fails, expand **Show setup details** for the error message.
 
-Check the interpreter shown by `pip --version`. Python 3.15 cannot install spotDL 4.5, which requires Python below 3.15. Run `.\install.cmd` to install with the project environment, or use the existing environment directly:
+### 3. Keep the launcher handy
+
+Use **Open app** to return to the browser and **Stop app** to stop the server started by that window. When closing the launcher, you can stop the app or minimize the window to keep it running.
+
+The default browser address is **http://127.0.0.1:5000**. If another program uses that port, the desktop launcher selects an available one and shows its address.
+
+<details>
+<summary><strong>Prefer terminal setup? Show the commands</strong></summary>
+
+Run these from the source project folder with Python 3.11–3.13 available. Python 3.13 is recommended for this project.
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+# Install the Python requirements and audio tools.
+.\install.cmd
+
+# Start the Python server.
 .\.venv\Scripts\python.exe app.py
 ```
 
-The `.python-version` file is used by uv; it does not change which interpreter a plain `pip` command uses.
+Then open http://127.0.0.1:5000. The setup script creates `.venv` and preserves a broken environment in `.venv-backup-*`.
 
-The conversion endpoint runs locally and cleans its temporary files after the ZIP response closes.
+For interpreter selection, manual installation, and the optional Node backend, see the [installation reference](docs/technical-reference.md#installation-details).
 
-## Conversion speed
+</details>
 
-Both backends use `conversion_engine.py`. Album metadata is fetched in bulk, then reused for downloads. Four workers reuse their spotDL sessions, and normalization runs during the first encode. Lyrics lookups and ZIP recompression are skipped. Album artwork is fetched once and reused. AAC packaging copies the encoded stream instead of encoding it again.
+## Convert your first collection
 
-Simplified playlist responses can omit the original album and cover image. Missing details are recovered from each unique track, using up to four reusable metadata sessions, while retaining playlist order and repeated tracks. Complete entries skip this lookup. Recovered track details are cached for a day and shared across playlists; incomplete results can retry after a minute. Existing playlist caches are repaired automatically on use. Each song keeps its original album name and cover. A failed artwork refresh preserves an image already embedded in the audio, and PNG images retain the correct tag type in MP3, FLAC, and M4A files.
+1. **Paste a Spotify link.** Use a playlist, album, or individual track link.
+2. **Check the title and track count.** Confirm the collection is the one you intended to add.
+3. **Choose your output.** Select a file format and audio quality, then choose **Add to Queue**. Repeat for up to five distinct links.
+4. **Choose Build ZIP.** Watch the current collection prepare and convert. Use its tabs or carousel controls to switch between queued collections.
+5. **Save the finished audio.** Choose **Download ZIP** for the collection or **Download** beside an individual completed track.
 
-The initial album list must arrive from Spotify before its tracks can be shown. After that, each track reports its own source lookup, download, and encoding progress. An unavailable source triggers an alternate-source attempt while the other workers continue. Any remaining failures get one final pass after the first queue settles; this pass clears a saved source URL to start preparation again. Socket waits and retries are bounded, and the ZIP includes successful tracks after all queued work settles. Preparation and conversion overlap; the phase durations in `/convert/<job_id>/status` are not additive when `timings.overlapped` is true.
+| Output setting | Available options |
+| :--- | :--- |
+| **File format** | MP3, WAV, AAC, FLAC, ALAC |
+| **Audio quality** | 96, 160, or 320 kbps, where supported by the selected codec |
+| **Default selection** | MP3 / 160 kbps |
+| **Spatial Audio** | Optional processing that widens the stereo field |
 
-The network display follows active jobs through metadata, downloads, encoding, and packaging, including jobs restored after a page reload. Both backends read the same computer-wide network counters. Rates use elapsed sample time and show small transfers in bytes per second; the received total retains short bursts even when current traffic falls to zero. Dropped packets and interface errors are shown separately. Unavailable counters show a retry state. Cached metadata and local encoding can correctly use no network, and other applications' traffic is included in these computer-wide measurements.
+Collections run in queue order. Within the current collection, up to four songs run in parallel; the next collection waits for its turn.
 
-Metadata and completed audio are cached in `.cache/conversion`. Albums and tracks refresh after one hour; playlists refresh after five minutes. The audio cache keeps up to 512 MiB, evicts older entries, and reuses a file only when the track, format, bitrate, and processing filter match. Concurrent requests for the same encode share one download. Corrupt entries are downloaded again. Removing this cache while the app is stopped forces fresh downloads.
+<p align="center">
+  <a href="docs/images/conversion-progress.png">
+    <img src="docs/images/conversion-progress.png" alt="Completed album conversion with a 100 percent progress bar, cover art, track details, and individual Download buttons" width="1120">
+  </a>
+  <br>
+  <sub>Each song keeps its own title, artist, album artwork, format, and download control.</sub>
+</p>
 
-The default is four workers per job. To experiment with another limit, set `$env:CONVOTIFY_WORKERS = "6"` before starting either backend; values are limited to 1–8. More workers can help when downloads are waiting on the network, but can slow a busy CPU or trigger provider limits. Use MP3 at 160 kbps for smaller output files. Lossless output and stem separation require more processing and storage.
+### If a track fails
 
-## Library downloads and playback
+Wait until every track in that collection has finished. Then choose **Retry failed** or the failed track's **Retry** button. Successful tracks stay available, and a completed retry refreshes the ZIP. You can also download a partial ZIP while keeping failed tracks available for a later retry.
 
-Open **Library → Download** to choose Original, Vocals, or Instrumental. Conversion panels offer the original track and album ZIP downloads. Vocal and instrumental preparation and downloads are available only through the library, in both server modes.
+## Your Library
 
-The Library also includes **Multitrack editing — Coming soon**. Expand **Explore the concept** to read about planned vocal editing, chorus and backing-vocal layers, instrument separation, and sound effects, with a proposed separate → arrange → mix → preview/export workflow. This section describes planned editing tools.
+Open **Library** from the converter to browse saved music, preview audio, and manage your collections.
 
-Use each track's **Preview → Original / Vocals / Instrumental** menu to listen before downloading. The player offers pause, replay, and a source selector for comparing the three versions. Previews last up to seven seconds, starting at 30 seconds for longer tracks and at the beginning for short tracks. A stem that is not prepared yet shows progress in the right-edge notification; playback then uses the same prepared file as downloads. Closing the player or choosing another source prevents a late preparation result from interrupting the new selection.
+<p align="center">
+  <a href="docs/images/library-shelves.png">
+    <img src="docs/images/library-shelves.png" alt="Spotibai Library with All tracks, Dangerous, and Bewitched collection shelves, a search field, and track cards with Preview and Download menus" width="1120">
+  </a>
+  <br>
+  <sub>Collection shelves keep playlist and album downloads recognizable after conversion.</sub>
+</p>
 
-Preview clips are cached alongside the selected audio under `.preview-cache`; replaying a valid clip skips encoding. Changing the source file invalidates its preview. Library menus rise above neighboring cards and close on an outside click or Escape.
+| Action | What to do |
+| :--- | :--- |
+| **Browse a collection** | Select a playlist or album shelf. Its count shows how many entries are saved; **Complete** means all entries are present. |
+| **Search your music** | Search by title, artist, or album. When a shelf is selected, the search stays within it. |
+| **Listen before downloading** | Open a track's **Preview** menu and choose **Original**, **Vocals**, or **Instrumental**. The player supports pause, replay, and switching sources. |
+| **Download a version** | Open **Download** and choose the original or a prepared stem. Vocals and instrumental downloads live in the Library. |
+| **Remove tracks** | Click a card to reveal checkboxes, select the tracks, then choose **Remove selected** and confirm. |
+| **Clear generated audio** | Choose **Clear stem & preview cache**. The confirmation explains that originals stay saved and separated audio will need preparation again. |
 
-Click a track card to reveal selection checkboxes, then choose the tracks to remove. **Remove selected** shows the count and asks for confirmation before deletion. **Select all shown** selects the current results; **Cancel** hides the checkboxes and clears the selection. Searching also clears the selection. You can focus a card and press Enter or Space to select it. Preview and Download controls do not change selection. Tracks that fail to delete stay visible and selected for retry.
+Previews play up to seven seconds. A song shared by several saved collections can appear on each shelf while reusing its Library audio.
 
-Notifications stack along the right edge. They show separation progress, then file-transfer progress based on received bytes. Unknown-size transfers use an indeterminate bar. A notification reaches 100% when the full file has arrived and is handed to the browser; errors do not start a download. Progress connections can fall back to status polling without restarting separation.
+<details>
+<summary><strong>Why are some tracks under Earlier downloads?</strong></summary>
 
-One Demucs inference prepares vocals and instrumental together. The model stays loaded between songs, simultaneous requests for the same song share a job, and different songs queue to avoid running multiple large models at once. Both outputs are encoded directly from the separated samples, without intermediate WAV files, and saved under `library/.stem-cache`. Valid files from the earlier library layout remain usable. Source changes invalidate the prepared cache. The default model, shift count, and overlap are preserved; CUDA is selected when the installed PyTorch build supports it.
+Older downloads may have no recorded collection link. They remain available in **All tracks** and **Earlier downloads**. Convert the original playlist or album again to create its shelf; matching legacy tracks retain their Library IDs.
 
-The first separation may download model weights. CPU separation of long tracks still takes time; choosing the other prepared stem or downloading it again skips inference. `CONVOTIFY_LIBRARY_DIR` can select a different library directory before either server is started.
+</details>
 
-## Tests
+### Prepare vocals and instrumental
 
-With the Python dependencies installed, run `.\.venv\Scripts\python.exe -m unittest discover -s tests -v`.
-For the Node backend and frontend regression checks, run `npm.cmd test` on Windows or `npm test` on other platforms.
-These tests simulate Spotify and audio download services; they do not download music.
+1. In the Library, find **Stem readiness** and choose **Run CPU & RAM test**.
+2. Wait for the result. The test separates an eight-second generated sample and reports elapsed time, CPU time, peak RAM, and an estimated processing speed.
+3. Open a track's **Preview** or **Download** menu and choose **Vocals** or **Instrumental**.
+4. Follow preparation in the progress notification at the right edge. One separation prepares both versions, so the other stem can reuse the result.
+
+The trial requires **2 GiB of available RAM** under the app's own readiness policy. It can be cancelled and stops after five minutes if unfinished. A slower CPU can pass; the result helps you judge the wait before preparing a full song. New stem work also checks the RAM available for that track.
+
+Originals and already-prepared stems stay available without another test. The first preparation may download model weights. Full-song processing time varies with the computer, track length, and other running apps.
+
+### Multitrack editing · Coming soon
+
+The Library includes a concept preview for planned lead-vocal editing, chorus and backing-vocal layers, separate instrument lanes, and sound effects. Expand **Explore the concept** to read the proposed workflow. These editing tools are planned; current vocal and instrumental separation is available through the Library menus.
+
+## Requirements at a glance
+
+| Component | Requirement |
+| :--- | :--- |
+| **Desktop launcher and executable** | 64-bit Windows |
+| **Audio runtime** | Python 3.11–3.13; the guided installer offers Python 3.13 |
+| **Audio tools** | FFmpeg and FFprobe, installed by the setup script |
+| **Connection** | Internet for first-time installation, Spotify metadata, audio sources, and the first model download |
+| **Stem preparation** | A passing CPU/RAM test and enough current free RAM for the selected track |
+| **Node.js** | Optional, for the alternative backend in the source project |
+
+## Build a Windows executable
+
+From the source project on 64-bit Windows, run:
+
+```powershell
+.\build-exe.cmd
+```
+
+The build installs its tools in a separate packaging environment, bundles the desktop UI, and checks that the packaged window starts.
+
+```text
+dist/
+├── Spotibai-<timestamp>/
+│   ├── Spotibai.exe               ← Open this after extracting the package
+│   ├── _internal/                 ← Keep the supporting runtime files
+│   ├── templates/
+│   └── static/
+├── Spotibai-Windows-<timestamp>.zip ← Share this clean package
+└── latest-build.json              ← Exact paths of the latest build
+```
+
+Share the generated ZIP. It includes app files and excludes your existing music, Library database, `.env`, jobs, caches, and development environments. Your own Library and audio environment are created in the folder where you run the extracted app.
+
+See the [packaging reference](docs/technical-reference.md#build-a-windows-executable) for diagnostics, updates, and moving an existing Library.
+
+## Troubleshooting
+
+| Problem | Next step |
+| :--- | :--- |
+| **“No matching distribution” during installation** | Use the project's supported Python version. Run `install.cmd` or **Install or repair requirements**, then start with `.venv\Scripts\python.exe`. |
+| **The local page does not open** | Choose **Open app** and use the address shown in the launcher. Check **Show setup details** if the server stopped. |
+| **A few tracks fail** | Let the collection finish, then manually retry the failed tracks. Successful downloads remain available. |
+| **Vocals or instrumental needs preparation** | Run the Library's readiness test, then choose the stem from **Preview** or **Download**. |
+| **The readiness test reports low RAM** | Close other apps and run the test again. Originals and existing prepared files remain usable. |
+| **Network activity reads zero during encoding** | Local encoding and cached metadata can use no network. The display measures traffic across the computer, including other apps. |
+
+For detailed cache behavior, performance settings, model processing, and setup diagnostics, read the [technical reference](docs/technical-reference.md).
+
+## Development
+
+With the project requirements installed, run the regression checks from the source folder:
+
+```powershell
+# Python backend and shared audio services
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+
+# Frontend and optional Node backend
+npm.cmd test
+```
+
+The regression suite simulates Spotify and audio download services; it does not download music.
+
+| Part of the project | Main files |
+| :--- | :--- |
+| **Desktop setup** | `launcher.py`, `launcher_core.py`, `launch.ps1`, `setup.ps1` |
+| **Web app** | `app.py`, `templates/`, `static/` |
+| **Shared conversion engine** | `conversion_engine.py`, `metadata_enrichment.py` |
+| **Library audio** | `preview_engine.py`, `stem_engine.py`, `stem_readiness.py`, `library_cache.py` |
+| **Executable packaging** | `build-exe.cmd`, `build-exe.ps1`, `build_exe.py` |
+| **Alternative backend** | `server.js`, `library_bridge.py` |
+
+<p align="center">
+  <sub>Built with Flask, spotDL, FFmpeg, and Demucs. The optional Node backend shares the Python audio services.</sub><br>
+  <a href="#quick-start">Back to setup</a> &nbsp; · &nbsp; <a href="docs/technical-reference.md">Technical reference</a>
+</p>

@@ -62,12 +62,30 @@
       </details>
     </section>
 
+    <section class="lib-readiness" id="lib-readiness" aria-labelledby="readiness-title">
+      <div class="lib-section-heading"><h2 id="readiness-title">Stem readiness</h2><span class="lib-coming-soon">Required for new stems</span></div>
+      <p>A short CPU separation test checks this computer's speed and available RAM. Originals and saved stems stay available.</p>
+      <p class="lib-muted">Uses an 8-second generated sample. The first test may download the separation model. It runs one test at a time and can be cancelled.</p>
+      <p id="readiness-hardware" class="lib-muted"></p>
+      <div class="readiness-actions"><button id="readiness-run" type="button">Run CPU &amp; RAM test</button><button id="readiness-cancel" type="button" hidden>Cancel test</button></div>
+      <progress id="readiness-progress" max="100" value="0" aria-label="Hardware test progress" hidden></progress>
+      <p id="readiness-status" role="status" aria-live="polite">Checking test status...</p>
+      <p id="readiness-result" class="lib-muted"></p>
+    </section>
+
+    <section class="lib-collections" aria-labelledby="lib-shelves-title">
+      <div class="lib-section-heading"><h2 id="lib-shelves-title">Collection shelves</h2><span class="lib-muted">Playlists &amp; albums</span></div>
+      <p id="lib-shelves-note" class="lib-muted">Collections appear as their converted tracks are saved. Each shelf shows how many entries are ready.</p>
+      <div id="lib-shelves" class="lib-shelves" role="group" aria-label="Choose a Library shelf"></div>
+    </section>
+    <h2 id="lib-shelf-title" class="lib-shelf-title">All tracks</h2>
     <div class="lib-toolbar">
       <div class="lib-search-wrap">
         <input id="lib-search" type="search" placeholder="Search title, artist, album…" autocomplete="off">
         <span class="lib-search-icon">⌕</span>
       </div>
       <span id="lib-count" class="lib-count"></span>
+      <button id="lib-clear-cache" class="lib-cache-button" type="button">Clear stem &amp; preview cache</button>
     </div>
 
     <p id="lib-selection-hint" class="lib-selection-hint">Click a card or press Enter to select tracks for removal.</p>

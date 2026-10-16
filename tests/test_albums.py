@@ -140,7 +140,7 @@ class AlbumTests(unittest.TestCase):
             first.close()
             second.close()
         with closing(converter._db()) as database:
-            self.assertEqual(database.execute("SELECT count(*) FROM tracks").fetchone()[0], 2)
+            self.assertEqual(database.execute("SELECT count(*) FROM tracks").fetchone()[0], 3)
 
     def test_first_track_starts_while_other_metadata_is_still_loading(self):
         with patch.object(converter.subprocess, "run", side_effect=self.fake_subprocess):
@@ -220,13 +220,13 @@ class AlbumTests(unittest.TestCase):
         self.assertEqual(job["state"], "complete")
         self.assertEqual((job["completed"], job["total"]), (2, 3))
         self.assertEqual(job["tracks"][1]["state"], "error")
-        self.assertEqual(Counter(self.downloads), {SONGS[0]["url"]: 1, SONGS[1]["url"]: 2,
+        self.assertEqual(Counter(self.downloads), {SONGS[0]["url"]: 1, SONGS[1]["url"]: 1,
                                                   SONGS[2]["url"]: 1})
-        self.assertEqual(job["tracks"][1]["retry_count"], 1)
+        self.assertEqual(job["tracks"][1]["retry_count"], 0)
         with zipfile.ZipFile(job["archive_path"]) as archive:
             self.assertEqual(len(archive.namelist()), 2)
 
-    def test_failed_track_prepares_again_only_after_all_initial_attempts_finish(self):
+    def test_failed_track_waits_for_manual_retry_and_keeps_successful_audio(self):
         attempts = Counter()
         retries = []
         snapshots = []
@@ -254,6 +254,18 @@ class AlbumTests(unittest.TestCase):
         with patch.object(converter, "update_job", side_effect=observe):
             with patch.object(converter.DownloadSession, "download", side_effect=transient):
                 job = self.run_job()
+                self.assertEqual((job["completed"], job["total"]), (2, 3))
+                self.assertEqual(attempts[SONGS[1]["url"]], 1)
+                original = converter.find_track_audio(job["tracks"][0], job["output_dir"])
+                original_time = original.stat().st_mtime_ns
+                with converter.app.test_client() as client, patch.object(converter, "enqueue_conversions") as enqueue:
+                    response = client.post(f"/convert/{self.job_id}/retry", json={"indices": [1]})
+                    self.assertEqual(response.status_code, 202)
+                    self.assertEqual(client.post(f"/convert/{self.job_id}/retry").status_code, 409)
+                    self.assertEqual(enqueue.call_args.args[0][0][2], [1])
+                with patch.object(converter.subprocess, "run", side_effect=self.fake_subprocess):
+                    converter.convert_job(self.job_id, [ALBUM_URL], Path("ffmpeg"), "wav", "160k", "album", [1])
+                self.assertEqual(original.stat().st_mtime_ns, original_time)
         self.assertEqual(job["state"], "complete", job.get("error"))
         self.assertEqual((job["completed"], job["total"]), (3, 3))
         self.assertEqual(attempts, {SONGS[0]["url"]: 1, SONGS[1]["url"]: 2, SONGS[2]["url"]: 1})
@@ -285,6 +297,38 @@ class AlbumTests(unittest.TestCase):
         self.assertEqual(job["tracks"][1]["retry_count"], 0)
         self.assertEqual(download.call_count, 3)
         self.assertEqual(job["completed"], 2)
+
+    def test_manual_retry_rejects_running_successful_skipped_and_invalid_tracks(self):
+        job = self.run_job()
+        with converter.app.test_client() as client:
+            self.assertEqual(client.post(f"/convert/{self.job_id}/retry", json={"indices": [0]}).status_code, 400)
+            for indices in ([], [99], [True], "all", [1, 1]):
+                self.assertEqual(client.post(f"/convert/{self.job_id}/retry", json={"indices": indices}).status_code, 400)
+            job["state"] = "processing"
+            self.assertEqual(client.post(f"/convert/{self.job_id}/retry").status_code, 409)
+
+    def test_all_failed_job_survives_reload_and_can_retry_one_song_only(self):
+        self.failed_urls = {song["url"] for song in SONGS}
+        job = self.run_job()
+        self.assertEqual(job["state"], "error")
+        self.assertTrue(self.job_dir.is_dir())
+        converter.JOBS.pop(self.job_id)
+        converter._load_persisted_jobs()
+        job = converter.JOBS[self.job_id]
+        self.assertEqual(job["state"], "error")
+        self.assertEqual(len(job["metadata"]), 3)
+        self.failed_urls.remove(SONGS[0]["url"])
+        with converter.app.test_client() as client, patch.object(converter, "enqueue_conversions"):
+            self.assertEqual(client.post(f"/convert/{self.job_id}/retry", json={"indices": [0]}).status_code, 202)
+        with patch.object(converter.subprocess, "run", side_effect=self.fake_subprocess):
+            converter.convert_job(self.job_id, [ALBUM_URL], Path("ffmpeg"), "wav", "160k", "album", [0])
+        self.assertEqual([track["state"] for track in job["tracks"]], ["converted", "error", "error"])
+        self.assertEqual(Counter(self.downloads), {SONGS[0]["url"]: 2, SONGS[1]["url"]: 1, SONGS[2]["url"]: 1})
+        with converter.app.test_client() as client:
+            response = client.get(f"/convert/{self.job_id}/download")
+            self.assertEqual(response.status_code, 200)
+            response.close()
+        self.assertIn(self.job_id, converter.JOBS, 'Downloading a partial ZIP must preserve manual retry')
 
     def test_zip_uses_collection_title_including_unicode_and_download_headers(self):
         title = "周末 Playlist 🎵"
@@ -374,6 +418,16 @@ class AlbumTests(unittest.TestCase):
         self.assertEqual(job["total"], 1)
         self.assertTrue(job["file_path"].is_file())
         self.assertNotIn("archive_path", job)
+
+    def test_successful_archive_releases_temporary_files_when_download_closes(self):
+        job = self.run_job()
+        folder = job["job_dir"]
+        with converter.app.test_client() as client:
+            response = client.get(f"/convert/{self.job_id}/download")
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.data.startswith(b"PK"))
+            response.close()
+        self.assertFalse(folder.exists())
 
 
 if __name__ == "__main__":

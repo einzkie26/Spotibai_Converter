@@ -141,7 +141,7 @@ def _valid_metadata(rows) -> bool:
     )
 
 
-def read_metadata(url: str, cache_dir: Path | None = None) -> tuple[list[dict], bool]:
+def read_metadata(url: str, cache_dir: Path | None = None, *, enrich=True) -> tuple[list[dict], bool]:
     url = canonical_url(url)
     root = (cache_dir or CACHE_DIR) / "metadata"
     root.mkdir(parents=True, exist_ok=True)
@@ -152,7 +152,7 @@ def read_metadata(url: str, cache_dir: Path | None = None) -> tuple[list[dict], 
         try:
             cached = json.loads(path.read_text(encoding="utf-8"))
             if 0 <= time.time() - cached["created"] < ttl and _valid_metadata(cached["songs"]):
-                if "/playlist/" not in url or (cached.get("metadata_version") == METADATA_VERSION and
+                if not enrich or "/playlist/" not in url or (cached.get("metadata_version") == METADATA_VERSION and
                     (not cached.get("metadata_incomplete") or time.time() - cached.get("enriched_at", 0) < 60)):
                     return cached["songs"], True
             else:
@@ -162,12 +162,28 @@ def read_metadata(url: str, cache_dir: Path | None = None) -> tuple[list[dict], 
         songs = cached["songs"] if cached else _fetch_metadata(url)
         if not _valid_metadata(songs):
             raise RuntimeError("No tracks found. Check that the Spotify album or playlist is available.")
-        if "/playlist/" in url:
+        if enrich and "/playlist/" in url:
             songs = _enrich_playlist(songs, cache_dir or CACHE_DIR)
         _atomic_json(path, {"created": cached["created"] if cached else time.time(), "songs": songs,
-                            "metadata_version": METADATA_VERSION, "enriched_at": time.time(),
+                            "metadata_version": METADATA_VERSION if enrich else 0, "enriched_at": time.time() if enrich else 0,
                             "metadata_incomplete": any(not metadata_complete(row) for row in songs)})
         return songs, False
+
+
+def inspect_collection(url: str, cache_dir: Path | None = None) -> dict:
+    """Verify the collection without per-track artwork lookups or audio work."""
+    url = canonical_url(url)
+    songs, _ = read_metadata(url, cache_dir, enrich=False)
+    kind = url.split("/")[-2]
+    first = songs[0]
+    name = first.get("name") if kind == "track" else next(
+        (song.get("list_name") for song in songs if song.get("list_name")), None)
+    if not name and kind == "album":
+        name = first.get("album_name")
+    if not name:
+        raise RuntimeError("The collection title could not be verified. Please try this link again.")
+    return {"url": url, "type": kind, "name": name, "total": len(songs),
+            "large_playlist": kind == "playlist" and len(songs) >= 200}
 
 
 def usable_audio(path: Path) -> bool:

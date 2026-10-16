@@ -31,7 +31,12 @@
           <input id="spotify-url" name="url" type="url" placeholder="https://open.spotify.com/playlist or track/..." autocomplete="off">
           <button type="button" id="add-queue-btn"><span>Add to Queue</span><b>+</b></button>
         </div>
-        <div class="form-meta"><span>playlist, album, or track URL</span><span id="settings-summary">MP3 / 160 kbps</span></div>
+        <div class="form-meta"><span>playlist, album, or track · <b id="queue-count">0 / 5 links</b></span><span id="settings-summary">MP3 / 160 kbps</span></div>
+        <div id="link-preview" class="link-preview" role="status" aria-live="polite" hidden>
+          <strong id="link-preview-name"></strong>
+          <span id="link-preview-detail"></span>
+          <p id="link-preview-warning" class="queue-warning" hidden></p>
+        </div>
         <ul id="queue-list" class="queue-list" hidden></ul>
         <div class="settings-grid" aria-label="Output settings">
           <label>Sound file format
@@ -74,40 +79,13 @@
 
       <!-- Panels container -->
       <div id="panels-container" class="panels-container" hidden>
-        <div id="panel-tabs" class="panel-tabs">
-          <button class="panel-tab panel-tab--active" data-panel="tracks" type="button">Tracks</button>
-          <button class="panel-tab" data-panel="playlists" type="button">Playlists &amp; Albums</button>
+        <div id="collection-tabs" class="collection-tabs" aria-label="Queued collections" hidden></div>
+        <div id="carousel-navigation" class="carousel-navigation" aria-label="Collection navigation" hidden>
+          <button id="collection-previous" type="button" aria-label="Previous collection">←</button>
+          <span id="collection-position" role="status" aria-live="polite"></span>
+          <button id="collection-next" type="button" aria-label="Next collection">→</button>
         </div>
-
-        <!-- Tracks panel -->
-        <div id="panel-tracks" class="conversion-panel" hidden>
-          <div class="panel-header">
-            <span class="panel-label">Tracks</span>
-            <div class="panel-header-actions">
-              <button id="cancel-all-tracks" class="cancel-all-btn" type="button" hidden>Cancel remaining</button>
-              <button id="download-tracks" class="download-button" type="button" disabled>Download ZIP</button>
-            </div>
-          </div>
-          <div class="progress-meta"><span id="progress-label-tracks">Preparing</span><strong id="progress-percent-tracks">0%</strong></div>
-          <div class="progress-track"><div id="progress-bar-tracks" class="progress-bar"></div></div>
-          <div class="eta"><span id="track-count-tracks">—</span><span id="eta-tracks">—</span></div>
-          <div id="track-list-tracks" class="track-list"></div>
-        </div>
-
-        <!-- Playlists / albums panel -->
-        <div id="panel-playlists" class="conversion-panel" hidden>
-          <div class="panel-header">
-            <span class="panel-label">Playlists &amp; Albums</span>
-            <div class="panel-header-actions">
-              <button id="cancel-all-playlists" class="cancel-all-btn" type="button" hidden>Cancel remaining</button>
-              <button id="download-playlists" class="download-button" type="button" disabled>Download ZIP</button>
-            </div>
-          </div>
-          <div class="progress-meta"><span id="progress-label-playlists">Preparing</span><strong id="progress-percent-playlists">0%</strong></div>
-          <div class="progress-track"><div id="progress-bar-playlists" class="progress-bar"></div></div>
-          <div class="eta"><span id="track-count-playlists">—</span><span id="eta-playlists">—</span></div>
-          <div id="track-list-playlists" class="track-list"></div>
-        </div>
+        <div id="collection-slides" aria-label="Conversion collections"></div>
       </div>
     </section>
 
