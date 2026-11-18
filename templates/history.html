@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spotibai | History</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .history-hero { padding: 56px 0 32px; }
+    .history-hero h1 { margin: 0; font-size: clamp(52px, 8vw, 96px); line-height: .88; letter-spacing: -.07em; font-weight: 600; }
+    .history-hero h1 em { color: var(--coral); font-style: normal; }
+
+    .history-section { margin: 32px 0; }
+    .history-section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+    .history-section-heading h2 { margin: 0; font-size: 1.1rem; letter-spacing: -.02em; }
+    .history-section-heading span { font: 11px "DM Mono", monospace; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+
+    .history-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+
+    .history-card {
+      display: grid; grid-template-columns: 64px 1fr; gap: 12px; align-items: center;
+      padding: 12px; border: 1px solid rgba(255,255,255,.72); border-radius: 14px;
+      background: rgba(255,255,255,.34); box-shadow: inset 0 1px 0 rgba(255,255,255,.68);
+      animation: card-in .3s ease both; transition: background .2s ease, transform .2s ease;
+    }
+    .history-card:hover { background: rgba(255,255,255,.58); transform: translateY(-2px); }
+    .history-cover {
+      width: 64px; height: 64px; border-radius: 10px; overflow: hidden;
+      background: var(--lime); display: grid; place-items: center;
+      font: 700 20px "Space Grotesk", sans-serif; color: var(--ink); flex-shrink: 0;
+    }
+    .history-cover img { width: 100%; height: 100%; object-fit: cover; }
+    .history-info { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+    .history-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .history-meta { font: 10px "DM Mono", monospace; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .history-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+    .history-tags i { font-style: normal; font: 9px "DM Mono", monospace; text-transform: uppercase; color: var(--coral); background: rgba(255,118,93,.1); border: 1px solid rgba(255,118,93,.25); border-radius: 4px; padding: 1px 5px; }
+    .history-tags i.tag-complete { color: #5a8a57; background: rgba(90,138,87,.1); border-color: rgba(90,138,87,.3); }
+    .history-tags i.tag-album { color: #7eb8f7; background: rgba(126,184,247,.1); border-color: rgba(126,184,247,.3); }
+
+    .history-empty { padding: 64px 0; text-align: center; color: var(--muted); font-size: 15px; }
+
+    html[data-theme="dark"] .history-card { background: rgba(43,65,57,.5); border-color: rgba(225,244,233,.18); }
+    html[data-theme="dark"] .history-card:hover { background: rgba(55,82,71,.72); }
+    html[data-theme="dark"] .history-cover { background: #809b3e; }
+
+    @media (max-width: 600px) {
+      .history-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <a href="/" class="brand-home"><span>Spotibai</span></a>
+        <p>|</p>
+        <h4>History</h4>
+      </div>
+      <div class="topbar-right">
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch theme"><span class="theme-icon">◐</span><span class="theme-label">Dark mode</span></button>
+        <a href="/" class="nav-library">← Converter</a>
+        <a href="/library" class="nav-library">Library</a>
+        <button id="settings-btn" class="settings-btn" type="button" aria-label="Open settings" title="Settings">⚙</button>
+      </div>
+    </header>
+
+    <section class="history-hero">
+      <h1>Conversion<br><em>History</em></h1>
+    </section>
+
+    <div id="history-empty" class="history-empty" hidden>
+      <p>No conversion history yet. Convert a playlist, album, or track to see it here.</p>
+      <a href="/" class="lib-cta">Go to Converter →</a>
+    </div>
+
+    <section id="history-collections" class="history-section" hidden>
+      <div class="history-section-heading">
+        <h2>Playlists &amp; Albums</h2>
+        <span id="history-collections-count"></span>
+      </div>
+      <div id="history-collections-grid" class="history-grid"></div>
+    </section>
+
+    <section id="history-singles" class="history-section" hidden>
+      <div class="history-section-heading">
+        <h2>Individual Tracks</h2>
+        <span id="history-singles-count"></span>
+      </div>
+      <div id="history-singles-grid" class="history-grid"></div>
+    </section>
+
+    <footer>Only download music you own or have permission to use.</footer>
+  </main>
+
+  <!-- Settings panel -->
+  <div id="settings-overlay" class="settings-overlay" hidden></div>
+  <aside id="settings-panel" class="settings-panel" role="dialog" aria-modal="true" aria-label="Settings" hidden>
+    <div class="settings-panel-header">
+      <h2>Settings</h2>
+      <button id="settings-close" class="settings-close" type="button" aria-label="Close settings">✕</button>
+    </div>
+    <section class="settings-section">
+      <h3>Stem readiness</h3>
+      <p>A short CPU separation test checks this computer's speed and available RAM.</p>
+      <p class="lib-muted">Uses an 8-second generated sample. The first test may download the separation model.</p>
+      <p id="readiness-hardware" class="lib-muted"></p>
+      <div class="readiness-actions"><button id="readiness-run" type="button">Run CPU &amp; RAM test</button><button id="readiness-cancel" type="button" hidden>Cancel test</button></div>
+      <progress id="readiness-progress" max="100" value="0" aria-label="Hardware test progress" hidden></progress>
+      <p id="readiness-status" role="status" aria-live="polite">Checking test status...</p>
+      <p id="readiness-result" class="lib-muted"></p>
+    </section>
+  </aside>
+
+  <div id="sep-toast-container" aria-live="polite"></div>
+  <script src="/static/downloads.js"></script>
+  <script src="/static/settings.js"></script>
+  <script>
+    'use strict';
+    const themeToggle = document.querySelector('#theme-toggle');
+    const themeIcon = themeToggle.querySelector('.theme-icon');
+    const themeLabel = themeToggle.querySelector('.theme-label');
+    const setTheme = t => {
+      document.documentElement.dataset.theme = t;
+      const dark = t === 'dark';
+      themeIcon.textContent = dark ? '☼' : '◐';
+      themeLabel.textContent = dark ? 'Light mode' : 'Dark mode';
+      themeToggle.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+    };
+    setTheme(localStorage.getItem('spotibai-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+    themeToggle.addEventListener('click', () => {
+      const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+      localStorage.setItem('spotibai-theme', next);
+      setTheme(next);
+    });
+
+    function esc(s) {
+      return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function formatDate(str) {
+      if (!str) return '';
+      try { return new Date(str).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
+      catch { return str.slice(0, 10); }
+    }
+
+    function makeCard(cover_url, title, meta, tags) {
+      const card = document.createElement('div');
+      card.className = 'history-card';
+      const cover = document.createElement('div');
+      cover.className = 'history-cover';
+      if (cover_url) {
+        const img = document.createElement('img');
+        img.src = cover_url; img.alt = ''; img.loading = 'lazy';
+        cover.append(img);
+      } else {
+        cover.textContent = (title || '?')[0].toUpperCase();
+      }
+      const info = document.createElement('div');
+      info.className = 'history-info';
+      info.innerHTML = `
+        <strong class="history-title">${esc(title)}</strong>
+        <span class="history-meta">${esc(meta)}</span>
+        <div class="history-tags">${tags.map(([label, cls]) => `<i class="${cls || ''}">${esc(label)}</i>`).join('')}</div>`;
+      card.append(cover, info);
+      return card;
+    }
+
+    async function loadHistory() {
+      const res = await fetch('/history/entries').catch(() => null);
+      if (!res || !res.ok) return;
+      const data = await res.json();
+      const colGrid = document.querySelector('#history-collections-grid');
+      const singGrid = document.querySelector('#history-singles-grid');
+      const colSec = document.querySelector('#history-collections');
+      const singSec = document.querySelector('#history-singles');
+      const emptyEl = document.querySelector('#history-empty');
+
+      if (data.collections.length) {
+        document.querySelector('#history-collections-count').textContent = `${data.collections.length} collection${data.collections.length === 1 ? '' : 's'}`;
+        data.collections.forEach(c => {
+          const tags = [
+            [c.kind === 'album' ? 'Album' : 'Playlist', c.kind === 'album' ? 'tag-album' : ''],
+            [c.complete ? 'Complete' : `${c.saved_tracks} tracks`, c.complete ? 'tag-complete' : ''],
+            [formatDate(c.updated_at), ''],
+          ];
+          colGrid.append(makeCard(c.cover_url, c.name, `${c.saved_tracks} of ${c.expected_total || '?'} tracks saved`, tags));
+        });
+        colSec.hidden = false;
+      }
+
+      if (data.singles.length) {
+        document.querySelector('#history-singles-count').textContent = `${data.singles.length} track${data.singles.length === 1 ? '' : 's'}`;
+        data.singles.forEach(t => {
+          const tags = [
+            [t.format || 'MP3', ''],
+            [t.bitrate || '', ''],
+            [formatDate(t.added_at), ''],
+          ].filter(([l]) => l);
+          singGrid.append(makeCard(t.cover_url, t.title, `${t.artist}${t.album ? ' · ' + t.album : ''}`, tags));
+        });
+        singSec.hidden = false;
+      }
+
+      emptyEl.hidden = data.collections.length > 0 || data.singles.length > 0;
+    }
+
+    loadHistory();
+  </script>
+  <script src="/static/live-progress.js"></script>
+</body>
+</html>

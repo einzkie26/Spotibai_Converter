@@ -268,6 +268,7 @@ def _persist_job(job_id: str) -> None:
         "track_names": job.get("track_names", []),
         "cancelled": list(job.get("cancelled", set())),
         "job_dir":   str(job["job_dir"]) if job.get("job_dir") else None,
+        "dest_folder": job.get("dest_folder", ""),
     }
     try:
         (JOBS_DIR / f"{job_id}.json").write_text(json.dumps(data), encoding="utf-8")
@@ -318,6 +319,7 @@ def _load_persisted_jobs() -> None:
             }
             if data.get("file_path"):
                 JOBS[job_id]["file_path"] = Path(data["file_path"])
+            JOBS[job_id]["dest_folder"] = data.get("dest_folder", "")
 
 
 #cover art download
@@ -760,6 +762,38 @@ def enqueue_conversions(entries):
             QUEUE_WORKER.start()
 
 
+@app.post("/settings/check-converted")
+def settings_check_converted():
+    payload = request.get_json(silent=True) or {}
+    dest_folder = str(payload.get("dest_folder", "")).strip()
+    name = str(payload.get("name", "")).strip()
+    if not dest_folder or not name:
+        return jsonify({"already_converted": False, "found_count": 0})
+    dest = Path(dest_folder)
+    if not dest.is_dir():
+        return jsonify({"already_converted": False, "found_count": 0})
+    safe_name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', name).strip(" .").lower()
+    found = [p for p in dest.iterdir() if p.is_file() and p.suffix.lower() in AUDIO_EXTS
+             and safe_name[:30] in p.stem.lower()]
+    return jsonify({"already_converted": len(found) > 0, "found_count": len(found)})
+
+
+@app.post("/settings/save-dest-folder")
+def settings_save_dest_folder():
+    payload = request.get_json(silent=True) or {}
+    dest_folder = str(payload.get("dest_folder", "")).strip()
+    if dest_folder and not Path(dest_folder).is_dir():
+        return jsonify({"error": "Folder does not exist or is not accessible."}), 400
+    return jsonify({"ok": True, "dest_folder": dest_folder})
+
+
+
+@app.get("/settings/downloads-folder")
+def settings_downloads_folder():
+    downloads = Path.home() / "Downloads"
+    return jsonify({"path": str(downloads) if downloads.is_dir() else ""})
+
+
 @app.post("/collections/preview")
 def collection_preview():
     url = (request.get_json(silent=True) or {}).get("url", "")
@@ -823,6 +857,7 @@ def convert():
     batch_id = uuid.uuid4().hex
     hints = payload.get("collections", [])
     hints = {item.get("url"): item for item in hints if isinstance(item, dict)} if isinstance(hints, list) else {}
+    dest_folder = str(payload.get("dest_folder", "")).strip()
     jobs = []
     with JOBS_LOCK:
         for position, url in enumerate(urls):
@@ -831,7 +866,7 @@ def convert():
                             "cancelled": set(), "started_at": time.monotonic(), "format": fmt,
                             "bitrate": bitrate_key, "link_type": spotify_link_type(url), "urls": [url],
                             "name": str(hints.get(url, {}).get("name", ""))[:300],
-                            "batch_id": batch_id, "batch_position": position}
+                            "batch_id": batch_id, "batch_position": position, "dest_folder": dest_folder}
             _persist_job(job_id)
             jobs.append({"job_id": job_id, **public_job(JOBS[job_id])})
     enqueue_conversions([(item["job_id"], ffmpeg, None) for item in jobs])
@@ -1216,6 +1251,48 @@ def library_preview(track_id: int):
         app.logger.warning("Library preview failed for %s: %s", track_id, exc)
         return jsonify({"error": "Preview could not be prepared. Please retry."}), 500
     return send_file(clip, mimetype="audio/mpeg", as_attachment=False, max_age=0)
+
+
+@app.delete("/library/collections/<int:collection_id>")
+def library_delete_collection(collection_id: int):
+    with closing(_db()) as con, con:
+        row = con.execute("SELECT id FROM collections WHERE id=?", (collection_id,)).fetchone()
+        if row is None:
+            return jsonify({"error": "Not found."}), 404
+        count = con.execute("SELECT count(DISTINCT track_id) FROM collection_tracks WHERE collection_id=?",
+                            (collection_id,)).fetchone()[0]
+        if count > 0:
+            return jsonify({"error": "Collection still has tracks."}), 409
+        con.execute("DELETE FROM collections WHERE id=?", (collection_id,))
+    return jsonify({"ok": True})
+
+
+@app.get("/history")
+def history_page():
+    return render_template("history.html")
+
+
+@app.get("/history/entries")
+def history_entries():
+    with closing(_db()) as con:
+        rows = con.execute("""
+            SELECT c.id, c.name, c.kind, c.cover_url, c.expected_total, c.updated_at,
+                   count(DISTINCT ct.track_id) saved_tracks
+            FROM collections c
+            LEFT JOIN collection_tracks ct ON ct.collection_id = c.id
+            GROUP BY c.id ORDER BY c.updated_at DESC
+        """).fetchall()
+        singles = con.execute("""
+            SELECT t.id, t.title, t.artist, t.album, t.cover_url, t.format, t.bitrate, t.added_at
+            FROM tracks t WHERE NOT EXISTS
+                (SELECT 1 FROM collection_tracks ct WHERE ct.track_id = t.id)
+            ORDER BY t.added_at DESC LIMIT 200
+        """).fetchall()
+    return jsonify({
+        "collections": [{**dict(r), "complete": r["expected_total"] > 0 and r["saved_tracks"] >= r["expected_total"]}
+                        for r in rows],
+        "singles": [dict(r) for r in singles],
+    })
 
 
 @app.delete("/library/tracks/<int:track_id>")

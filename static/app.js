@@ -240,7 +240,7 @@ function renderQueue() {
   updateQueueControls();
 }
 
-addQueueBtn.addEventListener('click', () => {
+addQueueBtn.addEventListener('click', async () => {
   if (startingJobs) return;
   if (queue.length >= 5) { message.textContent = 'The queue is full. You can add up to 5 links.'; return; }
   const url = urlInput.value.trim();
@@ -261,6 +261,21 @@ addQueueBtn.addEventListener('click', () => {
   }
   if (currentPreview.type === 'playlist' && currentPreview.total >= 200 && !confirm(
     `“${currentPreview.name}” contains ${currentPreview.total} tracks. Large playlists take longer and may include unavailable audio sources. Add it to the queue?`)) return;
+  // Check if already converted in destination folder
+  const destFolder = window.Settings?.getDestFolder();
+  if (destFolder) {
+    try {
+      const checkRes = await fetch('/settings/check-converted', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dest_folder: destFolder, name: currentPreview.name }),
+      });
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        if (checkData.already_converted && !confirm(
+          `“${currentPreview.name}” appears to already be in your destination folder (${checkData.found_count} matching file${checkData.found_count === 1 ? '' : 's'} found). Add to queue anyway?`)) return;
+      }
+    } catch { /* non-blocking */ }
+  }
   queue.push({ ...currentPreview });
   urlInput.value = '';
   currentPreview = null;
@@ -652,7 +667,8 @@ form.addEventListener('submit', async event => {
   try {
     const response = await fetch('/convert', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ urls: submitted.map(item => item.url), collections: submitted,
-        format: formatSelect.value, bitrate: bitrateSelect.value, spatial: !!spatialToggle.checked }) });
+        format: formatSelect.value, bitrate: bitrateSelect.value, spatial: !!spatialToggle.checked,
+        dest_folder: window.Settings?.getDestFolder() || '' }) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'The conversion queue could not be started.');
     const accepted = data.jobs || [{ job_id: data.job_id, state: 'queued', ...submitted[0] }];

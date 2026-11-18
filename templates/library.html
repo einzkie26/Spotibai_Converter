@@ -20,57 +20,13 @@
       <div class="topbar-right">
         <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch theme"><span class="theme-icon">◐</span><span class="theme-label">Dark mode</span></button>
         <a href="/" class="nav-library">← Converter</a>
+        <a href="/history" class="nav-library">History</a>
+        <button id="settings-btn" class="settings-btn" type="button" aria-label="Open settings" title="Settings">⚙</button>
       </div>
     </header>
 
     <section class="lib-hero">
       <h1>Your<br><em>Library</em></h1>
-    </section>
-
-    <section class="lib-studio" aria-labelledby="lib-studio-title">
-      <div class="lib-studio-heading">
-        <h2 id="lib-studio-title">Multitrack editing</h2>
-        <span class="lib-coming-soon">Coming soon</span>
-      </div>
-      <p>A planned workspace to separate layers, arrange parts, shape their sound, and preview your mix before export.</p>
-      <details class="lib-studio-concepts">
-        <summary>Explore the concept <span>Vocals · Chorus · Instruments · Sound effects</span></summary>
-        <div class="lib-studio-grid">
-          <article>
-            <span class="lib-coming-soon">Coming soon</span>
-            <h3>Vocals</h3>
-            <p>A dedicated lead-vocal lane with planned trimming, fades, volume, mute, and solo controls.</p>
-          </article>
-          <article>
-            <span class="lib-coming-soon">Coming soon</span>
-            <h3>Chorus</h3>
-            <p>Explore isolating backing vocals and layered harmonies, then aligning and balancing them with the lead.</p>
-          </article>
-          <article>
-            <span class="lib-coming-soon">Coming soon</span>
-            <h3>Instrument separation</h3>
-            <p>Plan a mix with separate drum, bass, and other instrument lanes, each with its own level and solo controls.</p>
-          </article>
-          <article>
-            <span class="lib-coming-soon">Coming soon</span>
-            <h3>Sound effects</h3>
-            <p>Shape individual layers with planned EQ, reverb, and delay, plus before-and-after listening.</p>
-          </article>
-        </div>
-        <p class="lib-studio-workflow"><strong>Planned workflow</strong> Choose a library track → Separate layers → Arrange &amp; mix → Preview &amp; export</p>
-        <p class="lib-studio-note">Concept preview. These editing tools are in development and are not available yet.</p>
-      </details>
-    </section>
-
-    <section class="lib-readiness" id="lib-readiness" aria-labelledby="readiness-title">
-      <div class="lib-section-heading"><h2 id="readiness-title">Stem readiness</h2><span class="lib-coming-soon">Required for new stems</span></div>
-      <p>A short CPU separation test checks this computer's speed and available RAM. Originals and saved stems stay available.</p>
-      <p class="lib-muted">Uses an 8-second generated sample. The first test may download the separation model. It runs one test at a time and can be cancelled.</p>
-      <p id="readiness-hardware" class="lib-muted"></p>
-      <div class="readiness-actions"><button id="readiness-run" type="button">Run CPU &amp; RAM test</button><button id="readiness-cancel" type="button" hidden>Cancel test</button></div>
-      <progress id="readiness-progress" max="100" value="0" aria-label="Hardware test progress" hidden></progress>
-      <p id="readiness-status" role="status" aria-live="polite">Checking test status...</p>
-      <p id="readiness-result" class="lib-muted"></p>
     </section>
 
     <section class="lib-collections" aria-labelledby="lib-shelves-title">
@@ -133,8 +89,45 @@
     <audio id="preview-audio" preload="none"></audio>
   </div>
 
+  <!-- Settings panel -->
+  <div id="settings-overlay" class="settings-overlay" hidden></div>
+  <aside id="settings-panel" class="settings-panel" role="dialog" aria-modal="true" aria-label="Settings" hidden>
+    <div class="settings-panel-header">
+      <h2>Settings</h2>
+      <button id="settings-close" class="settings-close" type="button" aria-label="Close settings">✕</button>
+    </div>
+
+    <section class="settings-section">
+      <h3>Stem readiness</h3>
+      <p>A short CPU separation test checks this computer's speed and available RAM. Originals and saved stems stay available.</p>
+      <p class="lib-muted">Uses an 8-second generated sample. The first test may download the separation model. It runs one test at a time and can be cancelled.</p>
+      <p id="readiness-hardware" class="lib-muted"></p>
+      <div class="readiness-actions"><button id="readiness-run" type="button">Run CPU &amp; RAM test</button><button id="readiness-cancel" type="button" hidden>Cancel test</button></div>
+      <progress id="readiness-progress" max="100" value="0" aria-label="Hardware test progress" hidden></progress>
+      <p id="readiness-status" role="status" aria-live="polite">Checking test status...</p>
+      <p id="readiness-result" class="lib-muted"></p>
+    </section>
+
+    <section class="settings-section">
+      <h3>Multitrack editing <span class="lib-coming-soon">Coming soon</span></h3>
+      <p>A planned workspace to separate layers, arrange parts, shape their sound, and preview your mix before export.</p>
+      <details class="lib-studio-concepts">
+        <summary>Explore the concept <span>Vocals · Chorus · Instruments · Sound effects</span></summary>
+        <div class="lib-studio-grid">
+          <article><span class="lib-coming-soon">Coming soon</span><h4>Vocals</h4><p>A dedicated lead-vocal lane with planned trimming, fades, volume, mute, and solo controls.</p></article>
+          <article><span class="lib-coming-soon">Coming soon</span><h4>Chorus</h4><p>Explore isolating backing vocals and layered harmonies, then aligning and balancing them with the lead.</p></article>
+          <article><span class="lib-coming-soon">Coming soon</span><h4>Instrument separation</h4><p>Plan a mix with separate drum, bass, and other instrument lanes, each with its own level and solo controls.</p></article>
+          <article><span class="lib-coming-soon">Coming soon</span><h4>Sound effects</h4><p>Shape individual layers with planned EQ, reverb, and delay, plus before-and-after listening.</p></article>
+        </div>
+        <p class="lib-studio-note">Concept preview. These editing tools are in development and are not available yet.</p>
+      </details>
+    </section>
+  </aside>
+
   <div id="sep-toast-container" aria-live="polite"></div>
   <script src="/static/downloads.js"></script>
+  <script src="/static/settings.js"></script>
   <script src="/static/library.js"></script>
+  <script src="/static/live-progress.js"></script>
 </body>
 </html>

@@ -637,3 +637,134 @@ button:disabled { cursor: not-allowed; }
 .lib-shelf > span:last-child { color: var(--muted); font-size: .75rem; line-height: 1.6; }
 .lib-shelf-title { font-size: 1.2rem; margin: 8px 0 20px; overflow-wrap: anywhere; }
 @media (max-width: 600px) { .lib-readiness { padding: 18px; } .lib-shelf { flex-basis: 154px; width: 154px; } }
+
+/* ── Settings button ──────────────────────────────────────────────────────── */
+.settings-btn {
+  display: grid; place-items: center; width: 34px; height: 34px;
+  padding: 0; border: 1px solid var(--line); border-radius: 50%;
+  background: rgba(255,255,255,.34); color: var(--ink);
+  font-size: 18px; cursor: pointer; flex-shrink: 0;
+  transition: background .15s ease, transform .25s ease;
+}
+.settings-btn:hover { background: var(--lime); transform: rotate(60deg); }
+html[data-theme="dark"] .settings-btn { background: rgba(37,57,51,.72); border-color: rgba(225,244,233,.22); }
+
+/* ── Settings overlay ─────────────────────────────────────────────────────── */
+.settings-overlay {
+  position: fixed; inset: 0; z-index: 400;
+  background: rgba(24,32,31,.38);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: page-in .2s ease both;
+}
+.settings-overlay[hidden] { display: none; }
+
+/* ── Settings panel ───────────────────────────────────────────────────────── */
+.settings-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 500;
+  width: min(420px, 100vw); overflow-y: auto;
+  background: var(--paper);
+  border-left: 1px solid rgba(255,255,255,.7);
+  box-shadow: -12px 0 48px rgba(24,32,31,.14);
+  backdrop-filter: blur(20px) saturate(130%);
+  -webkit-backdrop-filter: blur(20px) saturate(130%);
+  animation: slide-in-right .28s cubic-bezier(.2,.8,.2,1) both;
+  display: flex; flex-direction: column;
+}
+.settings-panel[hidden] { display: none; }
+@keyframes slide-in-right { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+.settings-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 22px 22px 16px; border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; background: var(--paper); z-index: 1;
+}
+.settings-panel-header h2 { margin: 0; font-size: 18px; letter-spacing: -.03em; }
+.settings-close {
+  display: grid; place-items: center; width: 30px; height: 30px; padding: 0;
+  border: 1px solid var(--line); border-radius: 50%; background: transparent;
+  color: var(--muted); font-size: 14px; cursor: pointer;
+}
+.settings-close:hover { color: var(--coral); border-color: var(--coral); }
+
+.settings-section {
+  padding: 20px 22px; border-bottom: 1px solid var(--line);
+}
+.settings-section h3 {
+  margin: 0 0 10px; font-size: 13px; text-transform: uppercase;
+  letter-spacing: .06em; font-family: "DM Mono", monospace; color: var(--muted);
+  display: flex; align-items: center; gap: 8px;
+}
+.settings-section h4 { margin: 12px 0 6px; font-size: 14px; }
+.settings-section p { margin: 0 0 10px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.settings-desc { font-size: 12px !important; }
+
+.settings-folder-row {
+  display: flex; align-items: center; gap: 6px; margin-top: 8px;
+}
+.settings-folder-input {
+  flex: 1; border: 1px solid var(--line); border-radius: 10px;
+  padding: 9px 12px; background: rgba(255,255,255,.42);
+  font: 12px "DM Mono", monospace; color: var(--ink); outline: none;
+}
+.settings-folder-input:focus { border-color: var(--coral); box-shadow: 0 0 0 3px rgba(255,118,93,.12); }
+.settings-folder-clear {
+  display: grid; place-items: center; width: 30px; height: 30px; padding: 0;
+  border: 1px solid var(--line); border-radius: 8px; background: transparent;
+  color: var(--muted); font-size: 13px; cursor: pointer; flex-shrink: 0;
+}
+.settings-folder-clear:hover { color: var(--coral); border-color: var(--coral); }
+.settings-folder-status {
+  margin: 6px 0 0 !important; font: 10px "DM Mono", monospace !important;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+
+html[data-theme="dark"] .settings-panel {
+  background: var(--paper); border-color: rgba(225,244,233,.18);
+}
+html[data-theme="dark"] .settings-panel-header { background: var(--paper); }
+html[data-theme="dark"] .settings-folder-input { background: rgba(37,57,51,.72); border-color: rgba(225,244,233,.22); }
+
+/* Persistent conversion panel, available while browsing any page. */
+.live-progress-widget {
+  position: fixed; z-index: 80; right: 20px; bottom: 20px; width: min(390px, calc(100vw - 32px));
+  overflow: hidden; border: 1px solid var(--line); border-radius: 16px;
+  color: var(--ink); background: var(--paper); box-shadow: 0 18px 55px rgba(24,32,31,.24);
+  backdrop-filter: blur(18px); animation: live-progress-in .22s ease-out both;
+}
+.live-progress-widget[hidden] { display: none; }
+@keyframes live-progress-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.live-progress-header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 14px; background: var(--lime); }
+.live-progress-heading { min-width: 0; display: grid; gap: 3px; }
+.live-progress-heading strong { font-size: 13px; }
+.live-progress-heading span { color: rgba(24,32,31,.72); font: 10px "DM Mono", monospace; }
+.live-progress-toggle { display: grid; flex: 0 0 30px; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid rgba(24,32,31,.2); border-radius: 50%; font-size: 18px; }
+.live-progress-toggle:hover { background: rgba(255,255,255,.45); }
+.live-progress-body { max-height: min(58vh, 520px); overflow: auto; padding: 0 14px 12px; }
+.live-progress-jobs { display: grid; gap: 10px; }
+.live-progress-job { min-width: 0; padding: 12px 0 10px; border-bottom: 1px solid var(--line); }
+.live-progress-job-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.live-progress-job-title strong { min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.live-progress-job-title span, .live-progress-count { flex: 0 0 auto; color: var(--muted); font: 10px "DM Mono", monospace; }
+.live-progress-track { height: 7px; overflow: hidden; border-radius: 99px; background: rgba(104,113,109,.2); }
+.live-progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--coral); transition: width .35s ease; }
+.live-progress-count { margin-top: 5px; text-align: right; }
+.live-progress-track-list { display: grid; gap: 5px; margin: 10px 0 0; padding: 0; list-style: none; }
+.live-progress-track-list li { display: flex; justify-content: space-between; gap: 10px; min-width: 0; font-size: 11px; }
+.live-progress-track-list li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-progress-track-list small { flex: 0 0 auto; max-width: 45%; overflow: hidden; color: var(--muted); font: 9px "DM Mono", monospace; text-overflow: ellipsis; white-space: nowrap; }
+.live-progress-track-list .live-progress-more, .live-progress-more-jobs { color: var(--muted); font: 10px "DM Mono", monospace; }
+.live-progress-more-jobs { margin: 8px 0 0; }
+.live-progress-link { display: inline-block; margin-top: 11px; color: var(--ink); font: 10px "DM Mono", monospace; text-decoration-color: var(--coral); text-underline-offset: 3px; }
+html[data-theme="dark"] .live-progress-widget { border-color: rgba(225,244,233,.2); box-shadow: 0 18px 55px rgba(0,0,0,.45); }
+html[data-theme="dark"] .live-progress-header { background: #809b3e; }
+html[data-theme="dark"] .live-progress-toggle { border-color: rgba(24,32,31,.3); }
+@media (max-width: 600px) {
+  .live-progress-widget { right: 10px; bottom: 10px; width: calc(100vw - 20px); border-radius: 13px; }
+  .live-progress-body { max-height: 46vh; }
+}
+
+@media (max-width: 600px) {
+  .settings-panel { width: 100vw; }
+  .settings-section { padding: 16px; }
+}
