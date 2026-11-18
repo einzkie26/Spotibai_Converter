@@ -15,3 +15,4 @@ start.ps1
 Start Spotibai.cmd
 install.cmd
 launch.ps1
+library/**
