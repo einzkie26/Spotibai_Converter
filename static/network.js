@@ -1,6 +1,7 @@
 'use strict';
 
 globalThis.NetworkStats = (() => {
+  let activeMonitor = null;
   function size(bytes) {
     if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(2)} MB`;
     if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -19,6 +20,8 @@ globalThis.NetworkStats = (() => {
     const errorsWrap = document.querySelector('#net-overflow-wrap');
     const total = document.querySelector('#net-total-recv');
     const detail = document.querySelector('#net-detail');
+    const activityMeter = document.querySelector('#net-activity-meter');
+    const activityLabel = document.querySelector('#net-activity-level');
     let active = false;
     let generation = 0;
     let timer = null;
@@ -28,6 +31,25 @@ globalThis.NetworkStats = (() => {
     let phase = 'Metadata';
     let unavailable = false;
     let issue = false;
+    const directions = { download: true, upload: true };
+
+    function setDirections(next = {}) {
+      directions.download = next.download !== false;
+      directions.upload = next.upload !== false;
+      if (!directions.download && !directions.upload) directions.download = true;
+      bar.dataset.showDownload = String(directions.download);
+      bar.dataset.showUpload = String(directions.upload);
+    }
+
+    function setActivityLevel(bytesPerSecond) {
+      const level = bytesPerSecond == null ? 'measuring'
+        : bytesPerSecond >= 1_048_576 ? 'high'
+        : bytesPerSecond >= 131_072 ? 'medium' : 'low';
+      const labelText = level === 'measuring' ? 'MEASURING' : level.toUpperCase();
+      activityLabel.textContent = labelText;
+      activityMeter.dataset.level = level;
+      activityMeter.setAttribute('aria-label', `Network activity level: ${labelText.toLowerCase()}`);
+    }
 
     function showPhase() {
       label.textContent = unavailable ? 'Stats unavailable' : phase;
@@ -53,6 +75,7 @@ globalThis.NetworkStats = (() => {
         const seconds = previous ? sample.sampled_at - previous.sampled_at : 0;
         if (!previous || seconds <= 0 || sample.bytes_sent < previous.bytes_sent || sample.bytes_recv < previous.bytes_recv) {
           sent.textContent = received.textContent = 'Measuring…';
+          setActivityLevel(null);
           loss.textContent = errors.textContent = '—';
           issue = false;
           lossWrap.classList.remove('net-warn');
@@ -66,6 +89,8 @@ globalThis.NetworkStats = (() => {
           totalReceived += receivedBytes;
           sent.textContent = `${size(sentBytes / seconds)}/s`;
           received.textContent = `${size(receivedBytes / seconds)}/s`;
+          const selectedBytes = (directions.upload ? sentBytes : 0) + (directions.download ? receivedBytes : 0);
+          setActivityLevel(selectedBytes / seconds);
           loss.textContent = String(dropped);
           errors.textContent = String(failed);
           issue = dropped > 0 || failed > 0;
@@ -83,6 +108,10 @@ globalThis.NetworkStats = (() => {
         previous = null;
         unavailable = true;
         sent.textContent = received.textContent = loss.textContent = errors.textContent = '—';
+        setActivityLevel(null);
+        activityLabel.textContent = 'UNAVAILABLE';
+        activityMeter.dataset.level = 'unavailable';
+        activityMeter.setAttribute('aria-label', 'Network activity level unavailable');
         lossWrap.classList.remove('net-warn');
         errorsWrap.classList.remove('net-warn');
         detail.textContent = 'Retrying network measurement…';
@@ -104,6 +133,7 @@ globalThis.NetworkStats = (() => {
       unavailable = issue = false;
       bar.hidden = false;
       sent.textContent = received.textContent = 'Measuring…';
+      setActivityLevel(null);
       loss.textContent = errors.textContent = '—';
       lossWrap.classList.remove('net-warn');
       errorsWrap.classList.remove('net-warn');
@@ -122,12 +152,16 @@ globalThis.NetworkStats = (() => {
       pending = null;
       previous = null;
       sent.textContent = received.textContent = '0 B/s';
+      setActivityLevel(0);
       label.textContent = 'Idle';
       dot.className = 'net-dot';
       detail.textContent = 'No conversion is running';
     }
 
-    return { start, stop, poll };
+    const monitor = { start, stop, poll, setDirections };
+    activeMonitor = monitor;
+    setDirections();
+    return monitor;
   }
-  return { create };
+  return { create, setDirections: directions => activeMonitor?.setDirections(directions) };
 })();

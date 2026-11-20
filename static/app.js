@@ -16,6 +16,7 @@ const themeToggle     = document.querySelector('#theme-toggle');
 const themeIcon       = themeToggle.querySelector('.theme-icon');
 const themeLabel      = themeToggle.querySelector('.theme-label');
 const networkMonitor = NetworkStats.create();
+networkMonitor.setDirections(window.Settings?.getNetworkPreferences?.() || {});
 let startingJobs = false;
 
 const panelsContainer = document.querySelector('#panels-container');
@@ -29,6 +30,7 @@ const panels = {};
 const collectionKeys = [];
 let selectedCollection = 0;
 const terminalStates = new Set(['complete', 'error']);
+const removableStates = new Set(['complete', 'error', 'interrupted']);
 
 function node(tag, className = '', text = '') {
   const element = document.createElement(tag);
@@ -60,12 +62,27 @@ function createPanel(entry, key = entry.job_id) {
     startedAt: performance.now(), status: { state: 'queued', tracks: [], total: 0, completed: 0 },
     panel: node('section', 'conversion-panel collection-slide'), label: node('span'), percent: node('strong'),
     bar: node('div', 'progress-bar'), count: node('span'), eta: node('span'), list: node('div', 'track-list'),
+    moreBtn: node('button', 'show-other-tracks', 'Show other tracks'),
+    moreDialog: node('dialog', 'overflow-tracks-dialog'), moreTitle: node('h2', 'overflow-tracks-title'),
+    moreClose: node('button', 'overflow-tracks-close', 'Close'), moreList: node('div', 'track-list overflow-tracks-list'),
     dlBtn: node('button', 'download-button', 'Download ZIP'), cancelBtn: node('button', 'cancel-all-btn', 'Skip remaining'),
     retryBtn: node('button', 'retry-failed-button', 'Retry failed'), resumeBtn: node('button', 'retry-failed-button', 'Resume'),
+    removeBtn: node('button', 'remove-conversion-button', '×'),
     title: node('h2', 'panel-label'), tab: node('button', 'panel-tab'),
   };
   p.panel.dataset.jobId = p.jobId;
   p.panel.setAttribute('aria-label', p.name);
+  p.moreDialog.setAttribute('aria-labelledby', `overflow-tracks-title-${key}`);
+  p.moreTitle.id = `overflow-tracks-title-${key}`;
+  p.moreTitle.textContent = `${p.name} · Other tracks`;
+  p.moreClose.type = 'button';
+  p.moreClose.addEventListener('click', () => p.moreDialog.close());
+  p.moreBtn.type = 'button';
+  p.moreBtn.hidden = true;
+  p.moreBtn.addEventListener('click', () => p.moreDialog.showModal());
+  p.moreDialog.addEventListener('click', event => {
+    if (event.target === p.moreDialog) p.moreDialog.close();
+  });
   p.title.textContent = p.name;
   p.tab.textContent = p.name;
   p.tab.title = p.name;
@@ -73,10 +90,14 @@ function createPanel(entry, key = entry.job_id) {
   p.tab.addEventListener('click', () => switchTab(key));
   const header = node('div', 'panel-header');
   const actions = node('div', 'panel-header-actions');
-  for (const control of [p.cancelBtn, p.retryBtn, p.resumeBtn, p.dlBtn]) control.type = 'button';
+  for (const control of [p.cancelBtn, p.retryBtn, p.resumeBtn, p.dlBtn, p.removeBtn]) control.type = 'button';
+  p.removeBtn.hidden = true;
+  p.removeBtn.title = 'Remove conversion';
+  p.removeBtn.setAttribute('aria-label', 'Remove conversion');
   p.dlBtn.disabled = true;
   p.cancelBtn.hidden = p.retryBtn.hidden = p.resumeBtn.hidden = true;
   p.dlBtn.addEventListener('click', () => doZipDownload(key));
+  p.removeBtn.addEventListener('click', () => removeConversionPanel(key));
   p.retryBtn.addEventListener('click', () => retryFailed(key));
   p.cancelBtn.addEventListener('click', () => cancelRemaining(key));
   p.resumeBtn.addEventListener('click', async () => {
@@ -90,7 +111,7 @@ function createPanel(entry, key = entry.job_id) {
     } catch (error) { p.label.textContent = error.message; }
     finally { p.resumeBtn.disabled = false; }
   });
-  actions.append(p.cancelBtn, p.retryBtn, p.resumeBtn, p.dlBtn);
+  actions.append(p.cancelBtn, p.retryBtn, p.resumeBtn, p.dlBtn, p.removeBtn);
   header.append(p.title, actions);
   const progress = node('div', 'progress-meta');
   progress.append(p.label, p.percent);
@@ -99,7 +120,10 @@ function createPanel(entry, key = entry.job_id) {
   p.bar.setAttribute('aria-valuemin', '0'); p.bar.setAttribute('aria-valuemax', '100');
   track.append(p.bar);
   const eta = node('div', 'eta'); eta.append(p.count, p.eta);
-  p.panel.append(header, progress, track, eta, p.list);
+  const moreHeader = node('div', 'overflow-tracks-header');
+  moreHeader.append(p.moreTitle, p.moreClose);
+  p.moreDialog.append(moreHeader, p.moreList);
+  p.panel.append(header, progress, track, eta, p.list, p.moreBtn, p.moreDialog);
   panels[key] = p;
   panelState[key] = { downloaded: new Set(), cancelled: new Set(), es: null };
   collectionKeys.push(key);
@@ -435,6 +459,7 @@ function buildCard(track, index, panelKey) {
   for (const label of [
     track.format || 'MP3', track.quality || '160 kbps',
     track.spatial ? 'Spatial' : null, track.size || 'Pending',
+    track.audio_match ? 'Studio fallback' : null,
     track.explicit ? 'E' : null,
     track.retry_count ? `Manual retry ${track.retry_count}` : null,
   ].filter(Boolean)) {
@@ -444,6 +469,12 @@ function buildCard(track, index, panelKey) {
     tags.append(tag);
   }
   info.append(titleEl, artistEl, albumEl, tags);
+  if (track.audio_match) {
+    const matched = document.createElement('span');
+    matched.className = 'track-step';
+    matched.textContent = `Studio/album audio: ${track.audio_match}${track.audio_match_album ? ` · ${track.audio_match_album}` : ''}`;
+    info.append(matched);
+  }
   if ((isActive && track.message) || (track.state === 'error' && track.error)) {
     const step = document.createElement('span');
     step.className = 'track-step';
@@ -494,10 +525,12 @@ function buildCard(track, index, panelKey) {
 
 // ── render tracks into a panel ─────────────────────────────────────────────
 function renderTracks(tracks, panelKey) {
-  const list = panels[panelKey].list;
+  const p = panels[panelKey];
+  const lists = [p.list, p.moreList];
   let retriesStarted = false;
   tracks.forEach((track, index) => {
-    const existing  = list.querySelector(`[data-track-index="${index}"]`);
+    const existing = lists.map(list => list.querySelector(`[data-track-index="${index}"]`)).find(Boolean);
+    const targetList = index < 5 ? p.list : p.moreList;
     const prevState = existing?.dataset.trackState;
     const prevSize  = existing?.dataset.trackSize;
     const prevCover = existing?.dataset.trackCover;
@@ -521,23 +554,40 @@ function renderTracks(tracks, panelKey) {
     card.dataset.trackMessage = track.message || '';
     card.dataset.trackRetry = String(track.retry_count || 0);
     card.dataset.retryAllowed = retryAllowed;
-    if (existing) list.replaceChild(card, existing);
-    else list.append(card);
+    if (existing?.parentElement === targetList) targetList.replaceChild(card, existing);
+    else {
+      existing?.remove();
+      targetList.append(card);
+    }
   });
-  list.querySelectorAll('[data-track-index]').forEach(el => {
+  lists.forEach(list => list.querySelectorAll('[data-track-index]').forEach(el => {
     if (parseInt(el.dataset.trackIndex, 10) >= tracks.length) el.remove();
-  });
-  // Move existing cards without changing their download/cancel indices or timers.
+  }));
+  p.moreBtn.hidden = tracks.length <= 5;
+  if (tracks.length > 5) {
+    const remaining = tracks.length - 5;
+    p.moreBtn.textContent = `Show other tracks (${remaining})`;
+    p.moreTitle.textContent = `${p.name} · ${remaining} other track${remaining === 1 ? '' : 's'}`;
+    p.moreDialog.setAttribute('aria-label', `${remaining} other tracks in ${p.name}`);
+  } else if (p.moreDialog.open) {
+    p.moreDialog.close();
+  }
+
+  // Keep each list in source order without changing track indices or timers.
   const ordered = tracks.map((track, index) => ({ index,
     priority: track.retry_count && !['converted', 'cancelled'].includes(track.state) ? 0 : 1,
   })).sort((a, b) => a.priority - b.priority || a.index - b.index);
-  ordered.forEach(({ index }, position) => {
+  [
+    { list: p.list, entries: ordered.filter(({ index }) => index < 5) },
+    { list: p.moreList, entries: ordered.filter(({ index }) => index >= 5) },
+  ].forEach(({ list, entries }) => entries.forEach(({ index }, position) => {
     const card = list.querySelector(`[data-track-index="${index}"]`);
     if (card && list.children[position] !== card) list.insertBefore(card, list.children[position] || null);
-  });
-  if (retriesStarted) panels[panelKey].panel.scrollTop = 0;
+  }));
+  if (retriesStarted) p.panel.scrollTop = 0;
 }
 
+/* Keep the first five tracks in the conversion panel and the rest in its dialog. */
 function applyStatus(status, panelKey) {
   const p          = panels[panelKey];
   p.status = { ...p.status, ...status };
@@ -587,7 +637,7 @@ function applyStatus(status, panelKey) {
   if (state === 'queued') p.eta.textContent = 'Collections prepare and convert one at a time';
 
   if (tracks && tracks.length) {
-    panels[panelKey].list.querySelectorAll('.meta-log-line').forEach(el => el.remove());
+    listsForPanel(p).forEach(list => list.querySelectorAll('.meta-log-line').forEach(el => el.remove()));
     renderTracks(tracks, panelKey);
   }
 
@@ -598,6 +648,7 @@ function applyStatus(status, panelKey) {
   p.retryBtn.disabled = !terminalStates.has(state);
   p.retryBtn.textContent = `Retry failed (${failed})`;
   p.resumeBtn.hidden = state !== 'interrupted';
+  p.removeBtn.hidden = !removableStates.has(state);
   const label = state === 'queued' ? 'Waiting' : state === 'complete' ? (failed ? `Done · ${failed} failed` : 'Done')
     : state === 'error' ? 'Failed' : state === 'metadata' ? 'Preparing' : state === 'interrupted' ? 'Interrupted' : 'Converting';
   p.tab.textContent = `${p.name} · ${label}`;
@@ -606,11 +657,55 @@ function applyStatus(status, panelKey) {
   syncNetworkMonitor();
 }
 
+function listsForPanel(panel) {
+  return [panel.list, panel.moreList];
+}
+
 // ── start one job and wire SSE ─────────────────────────────────────────────
 function startJob(jobId, panelKey = jobId, entry = {}) {
   createPanel({ ...entry, job_id: jobId }, panelKey);
   applyStatus({ state: 'metadata', ...entry }, panelKey);
   if (!terminalStates.has(panels[panelKey].status.state) && panels[panelKey].status.state !== 'interrupted') connectEvents(panelKey);
+}
+
+async function removeConversionPanel(panelKey) {
+  const p = panels[panelKey];
+  if (!p || !removableStates.has(p.status.state)) return;
+  const confirmed = window.confirm(
+    `Remove "${p.name}" from the conversion panel? This deletes its conversion files${p.status.state === 'interrupted' ? ', including any partially converted tracks' : ' and ZIP/archive'}. Tracks already saved to your Library will remain.`
+  );
+  if (!confirmed) return;
+  p.removeBtn.disabled = true;
+  try {
+    const response = await fetch(`/convert/${p.jobId}`, { method: 'DELETE' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not remove this conversion.');
+    const index = collectionKeys.indexOf(panelKey);
+    if (index < 0) return;
+    const wasSelected = index === selectedCollection;
+    panelState[panelKey]?.es?.close();
+    p.panel.remove();
+    p.tab.remove();
+    delete panels[panelKey];
+    delete panelState[panelKey];
+    collectionKeys.splice(index, 1);
+    if (!collectionKeys.length) {
+      selectedCollection = 0;
+      panelsContainer.hidden = true;
+      collectionTabs.hidden = true;
+      carouselNavigation.hidden = true;
+    } else {
+      if (index < selectedCollection) selectedCollection--;
+      if (wasSelected) selectedCollection = Math.min(index, collectionKeys.length - 1);
+      collectionTabs.hidden = carouselNavigation.hidden = collectionKeys.length < 2;
+      switchTab(collectionKeys[selectedCollection]);
+    }
+    updateQueueControls();
+    syncNetworkMonitor();
+  } catch (error) {
+    p.label.textContent = error.message || 'Could not remove this conversion.';
+    p.removeBtn.disabled = false;
+  }
 }
 
 function connectEvents(panelKey) {
@@ -668,6 +763,7 @@ form.addEventListener('submit', async event => {
     const response = await fetch('/convert', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ urls: submitted.map(item => item.url), collections: submitted,
         format: formatSelect.value, bitrate: bitrateSelect.value, spatial: !!spatialToggle.checked,
+        max_download_kbps: window.Settings?.getNetworkPreferences?.().maxDownloadKbps ?? null,
         dest_folder: window.Settings?.getDestFolder() || '' }) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'The conversion queue could not be started.');
@@ -777,7 +873,7 @@ async function doZipDownload(panelKey) {
 function syncNetworkMonitor() {
   const active = Object.values(panels).filter(panel => panel.jobId &&
     ['queued', 'metadata', 'processing', 'converting', 'packaging'].includes(panel.status?.state));
-  if (!startingJobs && !previewLoading && !active.length) { networkMonitor.stop(); return; }
+  if (!startingJobs && !previewLoading && !active.length) { networkMonitor.start('Idle'); return; }
   const tracks = active.flatMap(panel => panel.status.tracks || []);
   let phase = 'Preparing';
   if (tracks.some(track => track.state === 'downloading')) phase = 'Downloading';
@@ -789,6 +885,7 @@ function syncNetworkMonitor() {
   else if (active.some(panel => panel.status.state === 'converting')) phase = 'Converting';
   networkMonitor.start(phase);
 }
+networkMonitor.start('Idle');
 
 // ── resume interrupted jobs on page load ─────────────────────────────────────────
 // Restore collections, including failed tracks waiting for a manual retry.

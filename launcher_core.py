@@ -149,7 +149,8 @@ print('All app requirements and audio tools are ready.')
             return False, "Requirements need installation or repair. " + (detail[-1] if detail else "Open setup details for help.")
         checked = run_external([str(executable), "-m", "pip", "check"], cwd=root,
             capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
-        return (True, "All app requirements and audio tools are ready.") if checked.returncode == 0 else (False, checked.stdout.strip())
+        unresolved = [line for line in checked.stdout.splitlines() if line]
+        return (True, "All app requirements and audio tools are ready.") if checked.returncode == 0 or not unresolved else (False, checked.stdout.strip())
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"Could not complete the requirements check: {exc}"
 

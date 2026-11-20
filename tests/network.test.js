@@ -36,6 +36,22 @@ test('network rates use actual elapsed time, show small transfers, and retain re
   assert.equal(fixture.elements.get('#net-status-label').textContent, 'Idle');
 });
 
+test('direction preferences filter the live card and its activity rating', async () => {
+  const fixture = monitor([sample(1, 0, 0), sample(2, 2_000_000, 100)]);
+  fixture.monitor.setDirections({ download: false, upload: true });
+  fixture.monitor.start('Downloading'); await tick();
+  await fixture.monitor.poll();
+  const card = fixture.elements.get('#net-stats-bar');
+  assert.equal(card.dataset.showDownload, 'false');
+  assert.equal(card.dataset.showUpload, 'true');
+  assert.equal(fixture.elements.get('#net-activity-level').textContent, 'HIGH');
+
+  fixture.monitor.setDirections({ download: true, upload: false });
+  assert.equal(card.dataset.showDownload, 'true');
+  assert.equal(card.dataset.showUpload, 'false');
+  fixture.monitor.stop();
+});
+
 test('unavailable counters show an unavailable state and recover without fabricated zero readings', async () => {
   let count = 0;
   const fixture = monitor(() => ++count === 1 ? Response.json({ error: 'Unavailable' }, { status: 503 })

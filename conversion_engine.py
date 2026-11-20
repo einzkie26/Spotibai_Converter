@@ -256,14 +256,129 @@ def ffmpeg_arguments(fmt: str, audio_filter: str) -> str:
     return f'-af "{audio_filter}" -ar 44100 -threads 1{extra}'
 
 
+_VERSION_MARKERS = re.compile(
+    r"\b(?:live|remix(?:ed)?|mix|radio\s+edit|edit|extended|club|dance\s+mix|"
+    r"acoustic|instrumental|karaoke|cover|tribute|demo|bootleg|rework|mashup|"
+    r"sped\s*up|slowed|nightcore|8d|re-recorded)\b", re.IGNORECASE,
+)
+
+
+def _search_words(value: str) -> set[str]:
+    import unicodedata
+
+    normalized = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode().lower()
+    return set(re.findall(r"[a-z0-9]+", normalized)) - {"the", "a", "an", "and", "of", "feat", "ft"}
+
+
+def _is_source_lookup_failure(exception, downloader_errors) -> bool:
+    details = [str(exception or "")]
+    details.extend(str(error) for error in (downloader_errors or [])[-3:])
+    message = " ".join(details).lower()
+    return any(marker in message for marker in (
+        "lookuperror", "audioProviderError".lower(), "no results found", "no search results",
+        "could not find song", "no song found",
+        "sign in to confirm your age", "age-restricted", "age restricted", "confirm your age",
+    ))
+
+
+def _is_age_restricted_source_failure(exception, downloader_errors) -> bool:
+    details = [str(exception or "")]
+    details.extend(str(error) for error in (downloader_errors or [])[-3:])
+    message = " ".join(details).lower()
+    return any(marker in message for marker in (
+        "sign in to confirm your age", "age-restricted", "age restricted", "confirm your age",
+    ))
+
+
+def _studio_search_queries(item: dict) -> list[str]:
+    title = str(item.get("title") or "").strip()
+    artist = str(item.get("artist") or "").strip()
+    if not title or not artist:
+        return []
+    clean = re.sub(
+        r"\s*\(([^)]*)\)|\s*\[([^]]*)\]",
+        lambda match: "" if _VERSION_MARKERS.search(match.group(1) or match.group(2) or "") else match.group(0),
+        title,
+    )
+    for separator in (" - ", " – ", " — ", ": "):
+        parts = clean.rsplit(separator, 1)
+        if len(parts) == 2 and _VERSION_MARKERS.search(parts[1]):
+            clean = parts[0]
+            break
+    clean = re.sub(r"\s+", " ", clean).strip(" -–—:")
+    if not clean:
+        clean = title
+    no_parentheticals = re.sub(r"\s*[([{][^)]*[)\]}]", "", clean)
+    variants = [clean, no_parentheticals.strip()]
+    queries = []
+    for variant in variants:
+        query = f"{artist} - {variant}".strip(" -")
+        if variant and query not in queries:
+            queries.append(query)
+    return queries
+
+
+def _studio_spotify_candidates(item: dict, original_url: str, limit: int = 5):
+    """Return close Spotify album/single matches, excluding alternate recordings."""
+    from spotdl.types.song import Song
+
+    queries = _studio_search_queries(item)
+    title_prefix = f"{str(item.get('artist') or '').strip()} - "
+    target_words = _search_words(queries[-1][len(title_prefix):]) if queries and queries[-1].startswith(title_prefix) else set()
+    if not target_words:
+        target_words = _search_words(item.get("title", ""))
+    target_artists = _search_words(item.get("artist", ""))
+    original_id = str(original_url).rstrip("/").split("/")[-1]
+    ranked = {}
+    for query in _studio_search_queries(item):
+        try:
+            results = Song.search(query) or {}
+            tracks = results.get("tracks") or {}
+            for track in tracks.get("items", [])[:limit]:
+                album = track.get("album") or {}
+                name = str(track.get("name") or "")
+                album_name = str(album.get("name") or "")
+                if _VERSION_MARKERS.search(name) or _VERSION_MARKERS.search(album_name):
+                    continue
+                if album.get("album_type") not in {"album", "single", "compilation"}:
+                    continue
+                artists = [str(value.get("name") or "") for value in track.get("artists", [])]
+                artist_words = set().union(*(_search_words(value) for value in artists)) if artists else set()
+                artist_overlap = len(target_artists & artist_words) / max(1, len(target_artists))
+                if artist_overlap < 0.6:
+                    continue
+                title_words = _search_words(name)
+                title_overlap = len(target_words & title_words) / max(1, len(target_words))
+                if title_overlap < 0.65:
+                    continue
+                track_id = str(track.get("id") or "")
+                if not track_id or track_id == original_id:
+                    continue
+                duration = float(track.get("duration_ms") or 0) / 1000
+                wanted_duration = float((item.get("spotdl_data") or {}).get("duration") or 0)
+                duration_score = -abs(duration - wanted_duration) / max(wanted_duration, duration, 1)
+                score = (title_overlap, artist_overlap, album.get("album_type") == "album", duration_score)
+                if track_id not in ranked or score > ranked[track_id][0]:
+                    ranked[track_id] = (score, track)
+        except Exception:
+            continue
+    for _, track in sorted(ranked.values(), key=lambda result: result[0], reverse=True)[:limit]:
+        try:
+            yield Song.from_url(f"https://open.spotify.com/track/{track['id']}")
+        except Exception:
+            continue
+
+
 class DownloadSession:
     """One downloader/event loop per worker, reused for all its tracks."""
 
     def __init__(self, ffmpeg: str | Path, fmt: str, bitrate: str,
-                 audio_filter: str = NORMAL_FILTER, cache_dir: Path | None = None):
+                 audio_filter: str = NORMAL_FILTER, cache_dir: Path | None = None,
+                 max_download_kbps: float | None = None):
         self.ffmpeg, self.fmt, self.bitrate = str(ffmpeg), fmt, bitrate
         self.audio_filter = audio_filter
         self.cache_dir = cache_dir or CACHE_DIR
+        self.max_download_kbps = max_download_kbps
         self.local = threading.local()
         self.downloaders = []
         self.lock = threading.Lock()
@@ -282,12 +397,18 @@ class DownloadSession:
             for flag, value in (("--socket-timeout", "20"), ("--retries", "2"), ("--extractor-retries", "1")):
                 if flag not in yt_args:
                     yt_args += f" {flag} {value}"
+            if self.max_download_kbps is not None:
+                # Divide the user cap among the concurrently active track workers.
+                # Each yt-dlp process then gets a fair share of the aggregate limit.
+                per_worker_bytes = max(1, int(self.max_download_kbps * 1024 / WORKERS))
+                yt_args = re.sub(r"(?:^|\s)--limit-rate(?:=|\s+)\S+", " ", yt_args).strip()
+                yt_args += f" --limit-rate {per_worker_bytes}B"
             options.update({
                 "format": "m4a" if self.fmt in {"aac", "alac"} else self.fmt,
                 "bitrate": self.bitrate, "ffmpeg": self.ffmpeg,
                 "ffmpeg_args": ffmpeg_arguments(self.fmt, self.audio_filter),
                 "threads": 1, "lyrics_providers": [], "skip_album_art": True,
-                "audio_providers": ["youtube-music", "youtube"],
+                "audio_providers": ["youtube-music", "piped", "soundcloud", "bandcamp", "youtube"],
                 "overwrite": "force", "simple_tui": True, "print_errors": False,
                 "fetch_albums": False, "scan_for_songs": False,
                 "yt_dlp_args": yt_args.strip() or None,
@@ -337,20 +458,64 @@ class DownloadSession:
             handler.update_callback = progress
         # A total per-track timeout also covers slow provider searches.
         async def retrieve():
-            _, path = await downloader.async_search_and_download(song)
+            source_exception = None
+            age_restricted_source = False
+            try:
+                _, path = await downloader.async_search_and_download(song)
+            except Exception as exc:
+                source_exception = exc
+                path = None
+            if path is None and source_exception is None and downloader.errors:
+                source_exception = str(downloader.errors[-1])
+            age_restricted_source = _is_age_restricted_source_failure(source_exception, downloader.errors)
             # A provider can find a match whose audio is unavailable. Retry the
             # alternate search provider only on source failure, not tag/codec errors.
-            if path is None and downloader.errors and any(
-                marker in downloader.errors[-1] for marker in ("AudioProviderError", "LookupError")
-            ) and len(downloader.audio_providers) > 1:
+            if path is None and _is_source_lookup_failure(source_exception, downloader.errors) and len(downloader.audio_providers) > 1:
                 providers = downloader.audio_providers
                 try:
                     report("retrying", "Source unavailable; trying another source", 0)
                     downloader.audio_providers = providers[1:]
                     song.download_url = None
-                    _, path = await downloader.async_search_and_download(song)
+                    downloader.errors.clear()
+                    try:
+                        _, path = await downloader.async_search_and_download(song)
+                    except Exception as exc:
+                        source_exception = exc
+                        path = None
+                    if path is None and downloader.errors:
+                        source_exception = str(downloader.errors[-1])
+                    age_restricted_source = age_restricted_source or _is_age_restricted_source_failure(source_exception, downloader.errors)
                 finally:
                     downloader.audio_providers = providers
+            if path is None and _is_source_lookup_failure(source_exception, downloader.errors):
+                report("retrying", "Searching for a studio or album version", 0)
+                candidates = _studio_spotify_candidates(item, item.get("source_url") or data.get("url"))
+                found_studio = False
+                for candidate in candidates:
+                    downloader.errors.clear()
+                    candidate.download_url = None
+                    try:
+                        _, candidate_path = await downloader.async_search_and_download(candidate)
+                    except Exception:
+                        continue
+                    if candidate_path and usable_audio(Path(candidate_path)):
+                        item["fallback_source_url"] = candidate.url
+                        item["fallback_title"] = candidate.name
+                        item["fallback_album"] = candidate.album_name
+                        item["fallback_artist"] = candidate.artist
+                        report("downloading", f"Using studio version: {candidate.name}", 97)
+                        path = candidate_path
+                        found_studio = True
+                        break
+                if not found_studio:
+                    original_error = str(source_exception or (downloader.errors[-1] if downloader.errors else "No audio match found."))
+                    if age_restricted_source or _is_age_restricted_source_failure(source_exception, downloader.errors):
+                        raise RuntimeError(
+                            "The matching YouTube audio requires age verification. Tried Piped, SoundCloud, "
+                            "Bandcamp, and alternate studio/album matches, but none was accessible. "
+                            "Choose a non-restricted studio recording or try again later."
+                        )
+                    raise RuntimeError(f"No eligible studio or album recording was found. Original lookup: {original_error[-300:]}")
             return path
 
         path = downloader.loop.run_until_complete(asyncio.wait_for(retrieve(), timeout=600))
@@ -395,6 +560,10 @@ class DownloadSession:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         data = item.get("spotdl_data") or item
+        if item.get("fallback_title"):
+            item["title"] = item["fallback_title"]
+            item["album"] = item.get("fallback_album") or item.get("album", "")
+            item["artist"] = item.get("fallback_artist") or item.get("artist", "")
         source = canonical_url(item.get("source_url") or data["url"])
         # Include metadata and processing options so quality/filter changes never
         # return an old encode. Provider download URLs are deliberately excluded.
@@ -404,7 +573,9 @@ class DownloadSession:
         root.mkdir(parents=True, exist_ok=True)
         ext = ".m4a" if self.fmt == "alac" else f".{self.fmt}"
         cached = root / (key + ext)
-        name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", f"{data.get('artist') or item.get('artist') or 'Artist'} - {data.get('name') or item.get('title') or 'Track'}")
+        display_artist = item.get("fallback_artist") or data.get("artist") or item.get("artist") or "Artist"
+        display_title = item.get("fallback_title") or data.get("name") or item.get("title") or "Track"
+        name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", f"{display_artist} - {display_title}")
         target = output_dir / (name[:150].rstrip(". ") + ext)
         with FileLock(str(root / (key + ".lock")), timeout=660):
             if cached.exists() and time.time() - cached.stat().st_mtime < 7 * 86400 and usable_audio(cached):
@@ -416,6 +587,14 @@ class DownloadSession:
             # Work files stay hidden so a partial encode never appears complete.
             with tempfile.TemporaryDirectory(prefix=".download-", dir=output_dir) as folder:
                 produced = self._produce(item, Path(folder))
+                if item.get("fallback_title"):
+                    item["title"] = item["fallback_title"]
+                    item["album"] = item.get("fallback_album") or item.get("album", "")
+                    item["artist"] = item.get("fallback_artist") or item.get("artist", "")
+                    display_artist = item["artist"]
+                    display_title = item["title"]
+                    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", f"{display_artist} - {display_title}")
+                    target = output_dir / (name[:150].rstrip(". ") + ext)
                 shutil.copy2(produced, target)
             temporary = root / (key + f".{uuid.uuid4().hex}.tmp")
             try:

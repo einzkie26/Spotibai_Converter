@@ -62,9 +62,10 @@
       </div>
       <div class="topbar-right">
         <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch theme"><span class="theme-icon">◐</span><span class="theme-label">Dark mode</span></button>
-        <a href="/" class="nav-library">← Converter</a>
-        <a href="/library" class="nav-library">Library</a>
-        <button id="settings-btn" class="settings-btn" type="button" aria-label="Open settings" title="Settings">⚙</button>
+        <a href="/" class="nav-library nav-icon" aria-label="Converter" title="Converter"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h11l-3-3M17 17H6l3 3M18 7v4M6 17v-4"/></svg></a>
+        <a href="/library" class="nav-library nav-icon" aria-label="Library" title="Library"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="14" height="16" rx="2"/><path d="M8 8h6M8 12h6M8 16h4M18 7h2v13"/></svg></a>
+        <a href="/multitrack" class="nav-library nav-icon" aria-label="Multitrack editing" title="Multitrack editing"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16M12 4v16M19 4v16M2 9h6M9 15h6M16 8h6"/><circle cx="5" cy="9" r="1.8"/><circle cx="12" cy="15" r="1.8"/><circle cx="19" cy="8" r="1.8"/></svg></a>
+        <button id="settings-btn" class="settings-btn" type="button" aria-label="Open settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Z"/><path d="m19.4 13.5 1.1.9-1.5 2.6-1.4-.5a7.8 7.8 0 0 1-1.6.9l-.3 1.5h-3l-.3-1.5a7.8 7.8 0 0 1-1.6-.9l-1.4.5-1.5-2.6 1.1-.9a7.5 7.5 0 0 1 0-1.9l-1.1-.9 1.5-2.6 1.4.5a7.8 7.8 0 0 1 1.6-.9l.3-1.5h3l.3 1.5a7.8 7.8 0 0 1 1.6.9l1.4-.5 1.5 2.6-1.1.9a7.5 7.5 0 0 1 0 1.9Z"/></svg></button>
       </div>
     </header>
 
@@ -103,6 +104,21 @@
       <h2>Settings</h2>
       <button id="settings-close" class="settings-close" type="button" aria-label="Close settings">✕</button>
     </div>
+    <section class="settings-section network-settings">
+      <h3>Network transfer</h3>
+      <p class="settings-desc">Choose which traffic to show in the live monitor. Converting always needs download traffic; upload is shown for monitoring only.</p>
+      <div class="network-direction-options">
+        <label class="info-toggle"><input id="network-show-download" type="checkbox" checked><span class="toggle-track"><span></span></span><span class="toggle-text">Show downloads</span></label>
+        <label class="info-toggle"><input id="network-show-upload" type="checkbox" checked><span class="toggle-track"><span></span></span><span class="toggle-text">Show uploads</span></label>
+      </div>
+      <label class="info-toggle network-unlimited-toggle"><input id="network-use-all" type="checkbox" checked><span class="toggle-track"><span></span></span><span class="toggle-text">Use all available bandwidth</span></label>
+      <div class="network-limit-row">
+        <label for="network-limit">Maximum download rate</label>
+        <div class="network-limit-inputs"><input id="network-limit" type="number" min="0.1" step="0.1" placeholder="No limit" disabled><select id="network-limit-unit" aria-label="Download rate unit" disabled><option value="kbps">KB/s</option><option value="mbps">MB/s</option></select></div>
+      </div>
+      <p id="network-settings-status" class="network-settings-status" role="status" aria-live="polite">No limit; conversions can use all available bandwidth.</p>
+    </section>
+
     <section class="settings-section">
       <h3>Stem readiness</h3>
       <p>A short CPU separation test checks this computer's speed and available RAM.</p>
@@ -211,5 +227,6 @@
     loadHistory();
   </script>
   <script src="/static/live-progress.js"></script>
+  <script src="/static/page-transitions.js"></script>
 </body>
 </html>

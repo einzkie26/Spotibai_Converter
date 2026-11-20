@@ -105,8 +105,33 @@ class CacheTests(unittest.TestCase):
         finally:
             other.close()
 
+    def test_age_gate_errors_are_classified_for_alternative_provider_retry(self):
+        error = "AudioProviderError: Sign in to confirm your age."
+        self.assertTrue(engine._is_source_lookup_failure(error, []))
+        self.assertTrue(engine._is_age_restricted_source_failure(error, []))
+
 
 class EncodingTests(unittest.TestCase):
+    def test_bandwidth_limit_and_alternative_providers_are_configured(self):
+        instances = []
+
+        class Downloader:
+            def __init__(self, settings):
+                self.settings = settings
+                self.loop = asyncio.new_event_loop()
+                instances.append(self)
+
+        session = engine.DownloadSession("ffmpeg", "wav", "160k", max_download_kbps=2048)
+        try:
+            with patch.object(engine, "_spotdl_settings", return_value={}):
+                with patch("spotdl.download.downloader.Downloader", Downloader):
+                    session._downloader()
+            settings = instances[0].settings
+            self.assertIn(f"--limit-rate {int(2048 * 1024 / engine.WORKERS)}B", settings["yt_dlp_args"])
+            self.assertEqual(settings["audio_providers"], ["youtube-music", "piped", "soundcloud", "bandcamp", "youtube"])
+        finally:
+            session.close()
+
     def test_worker_reuses_downloader_and_fills_optional_tag_fields(self):
         instances = []
 

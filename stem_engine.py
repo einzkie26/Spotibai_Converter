@@ -18,7 +18,15 @@ from filelock import FileLock
 
 from conversion_engine import usable_audio
 
-STEMS = {"vocals": "Vocals", "instrumental": "Instrumental"}
+STEMS = {
+    "vocals": "Vocals",
+    "drums": "Drums - Beats",
+    "bass": "Bass",
+    "piano": "Piano",
+    "guitar": "Guitar",
+    "other": "Other Instruments",
+    "instrumental": "Instrumental",
+}
 
 
 def stem_path(source: Path, stem: str, fmt: str) -> Path:
@@ -29,7 +37,7 @@ def stem_path(source: Path, stem: str, fmt: str) -> Path:
 def fingerprint(source: Path, fmt: str, bitrate: str) -> str:
     stat = source.stat()
     return hashlib.sha256(json.dumps([str(source.resolve()), stat.st_size, stat.st_mtime_ns,
-                                     fmt, bitrate, "htdemucs-1-0.25-v1"]).encode()).hexdigest()
+                                     fmt, bitrate, "htdemucs_6s-1-0.25-v1"]).encode()).hexdigest()
 
 
 def cache_folder(source: Path) -> Path:
@@ -124,7 +132,7 @@ class StemService:
             from demucs.api import Separator
 
             torch.set_num_threads(max(1, min(4, psutil.cpu_count(logical=False) or 1)))
-            self.separator = Separator(model="htdemucs", device="cuda" if torch.cuda.is_available() else "cpu",
+            self.separator = Separator(model="htdemucs_6s", device="cuda" if torch.cuda.is_available() else "cpu",
                                        shifts=1, overlap=0.25, jobs=0, progress=False)
         return self.separator
 
@@ -143,7 +151,7 @@ class StemService:
             count = max(1, math.ceil(info["audio_length"] / stride))
             completed = min(count, info["segment_offset"] // stride + 1)
             fraction = (info["model_idx_in_bag"] + completed / count) / info["models"]
-            progress(10 + int(70 * fraction), "Separating vocals and instrumental")
+            progress(10 + int(70 * fraction), "Separating drums, bass, piano, guitar and vocals")
 
         separator.update_parameter(callback=callback)
         progress(6, "Reading library audio")
@@ -157,13 +165,15 @@ class StemService:
         del decoded
         with torch.inference_mode():
             original, estimates = separator.separate_tensor(audio, separator.samplerate)
-            vocals = estimates.pop("vocals")
-            # Match Demucs' default two-stem 'add' method.
+            # Preserve each separated part and build the combined instrumental for older workflows.
+            vocals = estimates["vocals"]
             instrumental = torch.zeros_like(vocals)
-            for estimate in estimates.values():
-                instrumental.add_(estimate)
+            for name, estimate in estimates.items():
+                if name != "vocals": instrumental.add_(estimate)
+            samples = {name: estimate.cpu() for name, estimate in estimates.items()}
+            samples["instrumental"] = instrumental.cpu()
             del estimates, original
-        return {"vocals": vocals.cpu(), "instrumental": instrumental.cpu()}, separator.samplerate
+        return samples, separator.samplerate
 
     def _encode(self, samples, samplerate, target, fmt, bitrate, ffmpeg):
         from demucs.audio import prevent_clip
@@ -203,7 +213,7 @@ class StemService:
                         raise RuntimeError(problem)
                     self._update(job_id, pct=3, msg="Loading the separation model" if self.separator is None else "Reading audio")
                     samples, samplerate = self._infer(source, lambda pct, msg: self._update(job_id, pct=pct, msg=msg), ffmpeg)
-                    self._update(job_id, pct=82, msg="Encoding vocals and instrumental")
+                    self._update(job_id, pct=82, msg="Encoding separated instrument layers")
                     for stem, existing in prepared.items():
                         target = stem_path(source, stem, fmt)
                         if existing is not None and existing != target:
@@ -237,7 +247,7 @@ class StemService:
                     manifest = folder / f"{job_id}.json"
                     manifest.write_text(json.dumps({"fingerprint": self.jobs[job_id]["key"]}))
                     manifest.replace(folder / "ready.json")
-                self._update(job_id, state="done", pct=100, msg="Vocals and instrumental are ready", cached=not needed)
+                self._update(job_id, state="done", pct=100, msg="Instrument and vocal layers are ready", cached=not needed)
         except Exception as exc:
             self._update(job_id, state="error", msg=str(exc) or "Stem separation failed.")
         finally:

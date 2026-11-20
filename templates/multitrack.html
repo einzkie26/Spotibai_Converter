@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spotibai | Multitrack Editing</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell multitrack-shell">
+    <header class="topbar">
+      <div class="brand">
+        <a href="/" class="brand-home"><span>Spotibai</span></a>
+        <p>|</p>
+        <h4>Multitrack Editing</h4>
+      </div>
+      <div class="topbar-right">
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch theme"><span class="theme-icon">◐</span><span class="theme-label">Dark mode</span></button>
+        <a href="/" class="nav-library nav-icon" aria-label="Converter" title="Converter"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h11l-3-3M17 17H6l3 3M18 7v4M6 17v-4"/></svg></a>
+        <a href="/library" class="nav-library nav-icon" aria-label="Library" title="Library"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="14" height="16" rx="2"/><path d="M8 8h6M8 12h6M8 16h4M18 7h2v13"/></svg></a>
+        <a href="/history" class="nav-library nav-icon" aria-label="History" title="History"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11a8 8 0 1 1 2.2 6M4 5v6h6M12 7v5l3 2"/></svg></a>
+      </div>
+    </header>
+
+    <section class="multitrack-hero">
+      <span class="multitrack-kicker">Audio workspace</span>
+      <h1>Multitrack<br><em>Editing</em></h1>
+      <p>Separate a Library track into vocal, drum, bass, piano and other instrument lanes. Shape and mix each layer, arrange transitions, compare approximate BPM and key, and export as WAV.</p>
+    </section>
+
+    <section class="multitrack-source" aria-labelledby="mt-source-title">
+      <div class="multitrack-section-title">
+        <div><span class="multitrack-kicker">01 / Add audio</span><h2 id="mt-source-title">Choose a Library track</h2></div>
+        <a href="/library">Manage Library →</a>
+      </div>
+      <div class="multitrack-source-controls">
+        <label>Track
+          <select id="mt-track-select"><option value="">Loading Library…</option></select>
+        </label>
+        <label>Layer
+          <select id="mt-source-select">
+            <option value="">Original audio</option>
+            <option value="vocals">Vocals</option>
+            <option value="drums">Drums / Beats</option>
+            <option value="bass">Bass</option>
+            <option value="piano">Piano</option>
+            <option value="guitar">Guitar</option>
+            <option value="other">Other instruments</option>
+            <option value="instrumental">Instrumental</option>
+          </select>
+        </label>
+        <button id="mt-add-track" class="multitrack-add" type="button" disabled>Add lane <span>+</span></button>
+      </div>
+      <p id="mt-status" class="multitrack-status" role="status" aria-live="polite">Loading tracks from your Library…</p>
+    </section>
+
+    <section class="multitrack-editor" aria-labelledby="mt-editor-title">
+      <div class="multitrack-section-title">
+        <div><span class="multitrack-kicker">02 / Arrange and mix</span><h2 id="mt-editor-title">Your session</h2></div>
+        <span id="mt-lane-count" class="multitrack-lane-count">0 lanes</span>
+      </div>
+      <div class="multitrack-transport">
+        <div class="multitrack-transport-buttons">
+          <button id="mt-play" type="button" disabled aria-label="Play mix">▶</button>
+          <button id="mt-stop" type="button" disabled aria-label="Stop mix">■</button>
+          <span id="mt-time">00:00 / 00:00</span>
+        </div>
+        <input id="mt-seek" type="range" min="0" max="0" step="0.01" value="0" aria-label="Mix playhead" disabled>
+        <label class="mt-master">Master <input id="mt-master" type="range" min="0" max="1.5" step="0.01" value="1" aria-label="Master volume"></label>
+        <button id="mt-export" class="multitrack-export" type="button" disabled>Export WAV</button>
+      </div>
+      <div class="multitrack-mixbar" aria-label="Playlist mix transitions">
+        <label>Transition
+          <select id="mt-transition-style">
+            <option value="auto">Auto</option>
+            <option value="fade">Fade</option>
+            <option value="rise">Rise</option>
+            <option value="dissolve">Dissolve</option>
+            <option value="cut">Cut</option>
+          </select>
+        </label>
+        <label class="mt-crossfade">Crossfade <output id="mt-crossfade-value">6 sec</output>
+          <input id="mt-crossfade" type="range" min="0" max="12" step="0.5" value="6">
+        </label>
+        <button id="mt-arrange-mix" type="button" disabled>Arrange as mix</button>
+        <button id="mt-mix-toggle" type="button" disabled>Turn Mix on</button>
+        <button id="mt-save-mix" type="button" disabled>Save mix</button>
+        <button id="mt-load-mix" type="button" disabled>Load saved mix</button>
+        <span>Order lanes with ↑ ↓, set cue in/out, then arrange to overlap tracks and apply transitions.</span>
+      </div>
+      <div id="mt-empty" class="multitrack-empty">
+        <span>＋</span><strong>Your timeline is empty</strong><p>Add a Library track or prepare its vocal and instrument layers.</p>
+      </div>
+      <div id="mt-lanes" class="multitrack-lanes" aria-live="polite"></div>
+      <p class="multitrack-footnote">Tempo and key are approximate estimates. Saved mix sessions stay in this browser. Piano separation may contain artifacts; vocal cleanup gates quiet noise and room tails but cannot remove echo under singing. Stem preparation uses your computer’s CPU and RAM; the first separation may ask you to run the CPU &amp; RAM test in Settings.</p>
+    </section>
+
+    <footer>Only edit or export audio you own or have permission to use.</footer>
+  </main>
+  <script src="/static/multitrack.js"></script>
+  <script src="/static/live-progress.js"></script>
+  <script src="/static/page-transitions.js"></script>
+</body>
+</html>

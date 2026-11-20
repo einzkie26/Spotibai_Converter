@@ -42,6 +42,7 @@ let activeShelf = '';
 const previewBar      = document.querySelector('#preview-bar');
 const previewAudio    = document.querySelector('#preview-audio');
 const previewCover    = document.querySelector('#preview-cover');
+const previewArtStage = document.querySelector('.preview-art-stage');
 const previewTitle    = document.querySelector('#preview-title');
 const previewArtist   = document.querySelector('#preview-artist');
 const previewProgress = document.querySelector('#preview-progress');
@@ -59,8 +60,28 @@ let previewController = null;
 let previewObjectUrl = null;
 let previewLoading = false;
 let previewFailed = false;
+let previewCoverAnimation = null;
 let openMenuButton = null;
 const sourceLabels = { '': 'Original', vocals: 'Vocals', instrumental: 'Instrumental' };
+
+const libraryArt = document.querySelector('.lib-hero-art');
+if (libraryArt && matchMedia('(hover: hover) and (pointer: fine)').matches && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  libraryArt.addEventListener('pointermove', event => {
+    const bounds = libraryArt.getBoundingClientRect();
+    const x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+    const y = ((event.clientY - bounds.top) / bounds.height) * 2 - 1;
+    libraryArt.style.setProperty('--parallax-x', `${(x * 9).toFixed(1)}px`);
+    libraryArt.style.setProperty('--parallax-y', `${(y * 7).toFixed(1)}px`);
+    libraryArt.style.setProperty('--tilt-x', `${(-y * 5).toFixed(1)}deg`);
+    libraryArt.style.setProperty('--tilt-y', `${(x * 6).toFixed(1)}deg`);
+  });
+  libraryArt.addEventListener('pointerleave', () => {
+    libraryArt.style.setProperty('--parallax-x', '0px');
+    libraryArt.style.setProperty('--parallax-y', '0px');
+    libraryArt.style.setProperty('--tilt-x', '0deg');
+    libraryArt.style.setProperty('--tilt-y', '0deg');
+  });
+}
 
 function closeLibraryMenus(restoreFocus = false) {
   document.querySelectorAll('.lib-dl-menu').forEach(menu => { menu.hidden = true; });
@@ -390,6 +411,15 @@ async function clearLibraryCache() {
 }
 clearCacheButton.addEventListener('click', clearLibraryCache);
 
+async function responseJsonOrError(response, fallback) {
+  const body = await response.text();
+  try { return JSON.parse(body); }
+  catch {
+    const detail = body.replace(/\s+/g, ' ').trim().slice(0, 180);
+    throw new Error(`${fallback} (HTTP ${response.status})${detail ? `: ${detail}` : '.'}`);
+  }
+}
+
 function prepareStem(id, stem, onProgress) {
   const key = `${id}:${stem}`;
   let preparation = activePreparations.get(key);
@@ -403,7 +433,7 @@ function prepareStem(id, stem, onProgress) {
       const response = await fetch(`/library/tracks/${id}/separate`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stem }),
       });
-      const data = await response.json();
+      const data = await responseJsonOrError(response, 'Separation could not be started');
       if (!response.ok) {
         if (data.readiness_required) {
           openSettings();
@@ -446,7 +476,7 @@ function waitForSeparation(id, jobId, onProgress) {
       while (!settled) {
         try {
           const response = await fetch(`/library/tracks/${id}/separate/${jobId}/status`);
-          const data = await response.json();
+          const data = await responseJsonOrError(response, 'Progress is unavailable');
           if (!response.ok) { settle(new Error(data.error || 'Progress is unavailable.')); return; }
           failures = 0;
           consume(data);
@@ -500,9 +530,38 @@ function syncPreviewControls() {
   previewToggle.textContent = previewLoading ? '…' : playing ? '⏸' : '▶';
   previewToggle.setAttribute('aria-label', previewFailed ? 'Retry preview' : playing ? 'Pause preview' : 'Play preview');
   previewBar.setAttribute('aria-busy', String(previewLoading));
+  syncPreviewArt(playing);
   grid.querySelectorAll('.lib-preview-btn').forEach(button => {
     button.textContent = playing && Number(button.dataset.id) === currentPreviewId ? '⏸ Preview ▾' : '▶ Preview ▾';
   });
+}
+
+function syncPreviewArt(playing) {
+  if (!previewCover || !previewArtStage || !previewCover.src || previewCover.style.display === 'none') return;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (playing) {
+    if (!previewCoverAnimation) {
+      previewCoverAnimation = previewCover.animate([
+        { transform: 'perspective(900px) rotateX(0deg) rotateY(0deg) translateY(0) scale(1)', filter: 'brightness(1)' },
+        { transform: 'perspective(900px) rotateX(7deg) rotateY(-9deg) translateY(-5px) scale(1.06)', filter: 'brightness(1.12)', offset: .35 },
+        { transform: 'perspective(900px) rotateX(-5deg) rotateY(8deg) translateY(-2px) scale(1.035)', filter: 'brightness(1.06)', offset: .72 },
+        { transform: 'perspective(900px) rotateX(0deg) rotateY(0deg) translateY(0) scale(1)', filter: 'brightness(1)' },
+      ], { duration: 7000, easing: 'ease-in-out', fill: 'both' });
+    }
+    previewCoverAnimation.currentTime = Math.min(7000, (previewAudio.currentTime || 0) * 1000);
+    previewCoverAnimation.play();
+    previewArtStage.classList.add('is-playing');
+  } else if (previewCoverAnimation) {
+    previewCoverAnimation.currentTime = Math.min(7000, (previewAudio.currentTime || 0) * 1000);
+    previewCoverAnimation.pause();
+    previewArtStage.classList.remove('is-playing');
+  }
+}
+
+function resetPreviewArt() {
+  previewCoverAnimation?.cancel();
+  previewCoverAnimation = null;
+  previewArtStage?.classList.remove('is-playing');
 }
 
 async function resumePreview(generation = previewRequest) {
@@ -620,6 +679,7 @@ function stopPreview() {
   currentPreviewStem = '';
   previewLoading = false;
   previewFailed = false;
+  resetPreviewArt();
   previewAudio.pause();
   previewAudio.removeAttribute('src');
   previewAudio.load();
@@ -644,6 +704,9 @@ previewAudio.addEventListener('timeupdate', () => {
   previewProgress.style.width = `${pct}%`;
   const rem = Math.max(0, Math.ceil(dur - previewAudio.currentTime));
   previewTime.textContent = `0:${String(rem).padStart(2, '0')}`;
+  if (previewCoverAnimation && !previewAudio.paused) {
+    previewCoverAnimation.currentTime = Math.min(7000, previewAudio.currentTime * 1000);
+  }
 });
 
 previewAudio.addEventListener('ended', () => {

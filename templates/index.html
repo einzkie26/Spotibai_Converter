@@ -19,16 +19,42 @@
     </div>
       <div class="topbar-right">
         <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch theme"><span class="theme-icon">◐</span><span class="theme-label">Dark mode</span></button>
-        <a href="/library" class="nav-library">Library</a>
-        <a href="/history" class="nav-library">History</a>
-        <button id="settings-btn" class="settings-btn" type="button" aria-label="Open settings" title="Settings">⚙</button>
+        <a href="/library" class="nav-library nav-icon" aria-label="Library" title="Library"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="14" height="16" rx="2"/><path d="M8 8h6M8 12h6M8 16h4M18 7h2v13"/></svg></a>
+        <a href="/history" class="nav-library nav-icon" aria-label="History" title="History"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11a8 8 0 1 1 2.2 6M4 5v6h6M12 7v5l3 2"/></svg></a>
+        <a href="/multitrack" class="nav-library nav-icon" aria-label="Multitrack editing" title="Multitrack editing"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16M12 4v16M19 4v16M2 9h6M9 15h6M16 8h6"/><circle cx="5" cy="9" r="1.8"/><circle cx="12" cy="15" r="1.8"/><circle cx="19" cy="8" r="1.8"/></svg></a>
+        <button id="settings-btn" class="settings-btn" type="button" aria-label="Open settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Z"/><path d="m19.4 13.5 1.1.9-1.5 2.6-1.4-.5a7.8 7.8 0 0 1-1.6.9l-.3 1.5h-3l-.3-1.5a7.8 7.8 0 0 1-1.6-.9l-1.4.5-1.5-2.6 1.1-.9a7.5 7.5 0 0 1 0-1.9l-1.1-.9 1.5-2.6 1.4.5a7.8 7.8 0 0 1 1.6-.9l.3-1.5h3l.3 1.5a7.8 7.8 0 0 1 1.6.9l1.4-.5 1.5 2.6-1.1.9a7.5 7.5 0 0 1 0 1.9Z"/></svg></button>
       </div>
     </header>
 
     <section class="hero">
-      <h1>Premium Cost?<br><em>Say Less</em> with Spotibai</h1>
+      <div class="hero-copy">
+        <h1>Take your music<br><em>everywhere.</em></h1>
+        <p class="lede">Turn playlists, albums, and tracks into a personal audio collection. Pick your format, choose your quality, and let Spotibai build the files.</p>
+        <div id="net-stats-bar" class="hero-visual hero-network-card" aria-label="Live computer network activity" title="Live traffic measured across this computer; local encoding may use no network.">
+          <div class="hero-visual-top"><span>LIVE NETWORK STATS</span><span class="hero-network-state"><i id="net-status-dot" class="net-dot"></i><b id="net-status-label">Idle</b></span></div>
+          <div class="hero-network-rates">
+            <div class="hero-network-rate hero-network-rate--download"><span>DOWNLOAD</span><strong id="net-recv">0 B/s</strong><i>&#8595;</i></div>
+            <div class="hero-network-rate hero-network-rate--upload"><span>UPLOAD</span><strong id="net-sent">0 B/s</strong><i>&#8593;</i></div>
+          </div>
+          <div id="net-activity-meter" class="net-activity-meter" data-level="low" role="img" aria-label="Network activity level: low" title="Combined upload and download rate: Low below 128 KB/s, Medium below 1 MB/s, High from 1 MB/s.">
+            <div class="net-activity-label"><span>ACTIVITY</span><strong id="net-activity-level">LOW</strong></div>
+            <div class="net-activity-scale"><span data-activity="low">LOW</span><span data-activity="medium">MEDIUM</span><span data-activity="high">HIGH</span></div>
+            <div class="net-activity-track"><i></i><i></i><i></i></div>
+          </div>
+          <div class="hero-visual-bottom"><span class="hero-network-total-download">RECEIVED <b id="net-total-recv">0 B</b></span><span id="net-detail" class="net-detail">Waiting for conversion activity</span></div>
+          <div class="hero-network-errors">
+            <span class="net-stat" id="net-loss-wrap">DROPPED <b id="net-loss">&mdash;</b></span>
+            <span class="net-stat" id="net-overflow-wrap">ERRORS <b id="net-overflow">&mdash;</b></span>
+          </div>
+        </div>
+      </div>
 
       <form id="convert-form" class="converter-form">
+        <div class="form-heading">
+          <div><span class="form-kicker">START A CONVERSION</span><h2>Paste your Spotify link</h2></div>
+          <span class="form-step">01</span>
+        </div>
+        <p class="form-intro">Add up to five playlists, albums, or tracks to your queue.</p>
         <div class="input-row">
           <input id="spotify-url" name="url" type="url" placeholder="https://open.spotify.com/playlist or track/..." autocomplete="off">
           <button type="button" id="add-queue-btn"><span>Add to Queue</span><b>+</b></button>
@@ -62,16 +88,6 @@
           <button id="submit-button" type="submit" disabled><span>Build ZIP</span><b>↗</b></button>
         </div>
       </form>
-      <div id="net-stats-bar" class="net-stats-bar" aria-label="Computer network activity" title="Network traffic across this computer. Cached metadata and local encoding may use no network." hidden>
-        <span id="net-status-dot" class="net-dot"></span>
-        <span id="net-status-label">Network</span>
-        <span class="net-stat">↑ <b id="net-sent">—</b></span>
-        <span class="net-stat">↓ <b id="net-recv">—</b></span>
-        <span class="net-stat">Received <b id="net-total-recv">—</b></span>
-        <span class="net-stat" id="net-loss-wrap">Dropped <b id="net-loss">—</b></span>
-        <span class="net-stat" id="net-overflow-wrap">Errors <b id="net-overflow">—</b></span>
-        <span id="net-detail" class="net-detail">Activity on this computer</span>
-      </div>
       <div id="message" class="message" role="status" aria-live="polite"></div>
 
       <!-- Panels container -->
@@ -105,6 +121,21 @@
       </label>
     </section>
 
+    <section class="settings-section network-settings">
+      <h3>Network transfer</h3>
+      <p class="settings-desc">Choose which traffic to show in the live monitor. Converting always needs download traffic; upload is shown for monitoring only.</p>
+      <div class="network-direction-options">
+        <label class="info-toggle"><input id="network-show-download" type="checkbox" checked><span class="toggle-track"><span></span></span><span class="toggle-text">Show downloads</span></label>
+        <label class="info-toggle"><input id="network-show-upload" type="checkbox" checked><span class="toggle-track"><span></span></span><span class="toggle-text">Show uploads</span></label>
+      </div>
+      <label class="info-toggle network-unlimited-toggle"><input id="network-use-all" type="checkbox" checked><span class="toggle-track"><span></span></span><span class="toggle-text">Use all available bandwidth</span></label>
+      <div class="network-limit-row">
+        <label for="network-limit">Maximum download rate</label>
+        <div class="network-limit-inputs"><input id="network-limit" type="number" min="0.1" step="0.1" placeholder="No limit" disabled><select id="network-limit-unit" aria-label="Download rate unit" disabled><option value="kbps">KB/s</option><option value="mbps">MB/s</option></select></div>
+      </div>
+      <p id="network-settings-status" class="network-settings-status" role="status" aria-live="polite">No limit; conversions can use all available bandwidth.</p>
+    </section>
+
     <section class="settings-section">
       <h3>Destination folder</h3>
       <p class="settings-desc">Converted tracks are saved here instead of a ZIP download. Leave empty to use the default ZIP download.</p>
@@ -127,18 +158,9 @@
     </section>
 
     <section class="settings-section">
-      <h3>Multitrack editing <span class="lib-coming-soon">Coming soon</span></h3>
-      <p>A planned workspace to separate layers, arrange parts, shape their sound, and preview your mix before export.</p>
-      <details class="lib-studio-concepts">
-        <summary>Explore the concept <span>Vocals · Chorus · Instruments · Sound effects</span></summary>
-        <div class="lib-studio-grid">
-          <article><span class="lib-coming-soon">Coming soon</span><h4>Vocals</h4><p>A dedicated lead-vocal lane with planned trimming, fades, volume, mute, and solo controls.</p></article>
-          <article><span class="lib-coming-soon">Coming soon</span><h4>Chorus</h4><p>Explore isolating backing vocals and layered harmonies, then aligning and balancing them with the lead.</p></article>
-          <article><span class="lib-coming-soon">Coming soon</span><h4>Instrument separation</h4><p>Plan a mix with separate drum, bass, and other instrument lanes, each with its own level and solo controls.</p></article>
-          <article><span class="lib-coming-soon">Coming soon</span><h4>Sound effects</h4><p>Shape individual layers with planned EQ, reverb, and delay, plus before-and-after listening.</p></article>
-        </div>
-        <p class="lib-studio-note">Concept preview. These editing tools are in development and are not available yet.</p>
-      </details>
+      <h3>Multitrack editing</h3>
+      <p>Arrange Library tracks and separated vocal or instrumental stems, balance lanes, and export a WAV mix.</p>
+      <a class="lib-cta" href="/multitrack">Open Multitrack Editing →</a>
     </section>
   </aside>
 
@@ -148,5 +170,6 @@
   <script src="/static/settings.js"></script>
   <script src="/static/app.js"></script>
   <script src="/static/live-progress.js"></script>
+  <script src="/static/page-transitions.js"></script>
 </body>
 </html>

@@ -22,7 +22,7 @@ GB = 1024 ** 3
 SAMPLE_SECONDS = 8
 MAX_SECONDS = 300
 MIN_FREE_RAM = 2 * GB
-PRESET = "htdemucs-cpu-shifts1-overlap025-threads4-v1"
+PRESET = "htdemucs_6s-cpu-shifts1-overlap025-threads4-v1"
 
 
 def hardware():
@@ -232,9 +232,9 @@ def trial_worker():
     import torch
     from demucs.api import Separator
     torch.set_num_threads(min(4, psutil.cpu_count(logical=False) or 1))
-    emit(msg="Loading htdemucs. Model weights download automatically on the first test...", pct=15)
+    emit(msg="Loading htdemucs_6s. Model weights download automatically on the first test...", pct=15)
     started = time.monotonic()
-    separator = Separator(model="htdemucs", device="cpu", shifts=1, overlap=.25, jobs=0, progress=False)
+    separator = Separator(model="htdemucs_6s", device="cpu", shifts=1, overlap=.25, jobs=0, progress=False)
     load_seconds = time.monotonic() - started
     sample_rate = separator.samplerate
     axis = torch.arange(SAMPLE_SECONDS * sample_rate, dtype=torch.float32) / sample_rate
@@ -243,7 +243,8 @@ def trial_worker():
     wall, cpu = time.monotonic(), time.process_time()
     _, stems = separator.separate_tensor(sample, sr=sample_rate)
     elapsed, cpu_elapsed = time.monotonic() - wall, time.process_time() - cpu
-    if "vocals" not in stems or len(stems) < 2 or any(value.numel() == 0 or not torch.isfinite(value).all() for value in stems.values()):
+    required_stems = {"vocals", "drums", "bass", "other", "piano", "guitar"}
+    if not required_stems.issubset(stems) or any(value.numel() == 0 or not torch.isfinite(value).all() for value in stems.values()):
         raise RuntimeError("The separation model did not return valid audio tensors.")
     emit(measurement={"wall_seconds": elapsed, "cpu_seconds": cpu_elapsed,
          "seconds_per_minute": elapsed / SAMPLE_SECONDS * 60, "load_seconds": load_seconds,

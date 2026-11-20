@@ -32,6 +32,73 @@ const destClear   = document.querySelector('#dest-folder-clear');
 const destStatus  = document.querySelector('#dest-folder-status');
 
 const DEST_KEY = 'spotibai-dest-folder';
+const NETWORK_KEY = 'spotibai-network-preferences';
+const networkDownloadToggle = document.querySelector('#network-show-download');
+const networkUploadToggle = document.querySelector('#network-show-upload');
+const networkUseAllToggle = document.querySelector('#network-use-all');
+const networkLimitInput = document.querySelector('#network-limit');
+const networkLimitUnit = document.querySelector('#network-limit-unit');
+const networkSettingsStatus = document.querySelector('#network-settings-status');
+
+function readNetworkPreferences() {
+  const defaults = { showDownload: true, showUpload: true, useAllBandwidth: true, limit: '', unit: 'kbps' };
+  try { return { ...defaults, ...JSON.parse(localStorage.getItem(NETWORK_KEY) || '{}') }; }
+  catch { return defaults; }
+}
+
+function applyNetworkPreferences() {
+  if (!networkDownloadToggle) return;
+  const prefs = readNetworkPreferences();
+  networkDownloadToggle.checked = prefs.showDownload !== false;
+  networkUploadToggle.checked = prefs.showUpload !== false;
+  if (!networkDownloadToggle.checked && !networkUploadToggle.checked) networkDownloadToggle.checked = true;
+  networkUseAllToggle.checked = prefs.useAllBandwidth !== false;
+  networkLimitInput.value = prefs.limit || '';
+  networkLimitUnit.value = prefs.unit === 'mbps' ? 'mbps' : 'kbps';
+  networkLimitInput.disabled = networkLimitUnit.disabled = networkUseAllToggle.checked;
+  window.NetworkStats?.setDirections({ download: networkDownloadToggle.checked, upload: networkUploadToggle.checked });
+  updateNetworkSettingsStatus();
+}
+
+function saveNetworkPreferences() {
+  const prefs = {
+    showDownload: networkDownloadToggle.checked,
+    showUpload: networkUploadToggle.checked,
+    useAllBandwidth: networkUseAllToggle.checked,
+    limit: networkLimitInput.value.trim(),
+    unit: networkLimitUnit.value,
+  };
+  localStorage.setItem(NETWORK_KEY, JSON.stringify(prefs));
+  networkLimitInput.disabled = networkLimitUnit.disabled = prefs.useAllBandwidth;
+  window.NetworkStats?.setDirections({ download: prefs.showDownload, upload: prefs.showUpload });
+  updateNetworkSettingsStatus();
+}
+
+function updateNetworkSettingsStatus() {
+  if (!networkSettingsStatus || !networkUseAllToggle) return;
+  const value = Number(networkLimitInput.value);
+  if (networkUseAllToggle.checked || !Number.isFinite(value) || value <= 0) {
+    networkSettingsStatus.textContent = 'No limit; conversions can use all available bandwidth.';
+  } else {
+    networkSettingsStatus.textContent = `Incoming audio downloads are capped at ${value} ${networkLimitUnit.value === 'mbps' ? 'MB/s' : 'KB/s'} per conversion.`;
+  }
+}
+
+networkDownloadToggle?.addEventListener('change', () => {
+  if (!networkDownloadToggle.checked && !networkUploadToggle.checked) networkUploadToggle.checked = true;
+  saveNetworkPreferences();
+});
+networkUploadToggle?.addEventListener('change', () => {
+  if (!networkUploadToggle.checked && !networkDownloadToggle.checked) networkDownloadToggle.checked = true;
+  saveNetworkPreferences();
+});
+networkUseAllToggle?.addEventListener('change', saveNetworkPreferences);
+networkLimitInput?.addEventListener('input', () => {
+  if (networkLimitInput.value.trim()) networkUseAllToggle.checked = false;
+  saveNetworkPreferences();
+});
+networkLimitUnit?.addEventListener('change', saveNetworkPreferences);
+applyNetworkPreferences();
 
 async function loadDestFolder() {
   if (!destInput) return;
@@ -75,6 +142,14 @@ loadDestFolder();
 // ── Expose helpers for app.js / library.js ────────────────────────────────
 window.Settings = {
   getDestFolder: () => (localStorage.getItem(DEST_KEY) || '').trim(),
+  getNetworkPreferences: () => {
+    const prefs = readNetworkPreferences();
+    const value = Number(prefs.limit);
+    const limit = !prefs.useAllBandwidth && Number.isFinite(value) && value > 0
+      ? value * (prefs.unit === 'mbps' ? 1024 : 1) : null;
+    return { showDownload: prefs.showDownload !== false, showUpload: prefs.showUpload !== false,
+      maxDownloadKbps: limit };
+  },
 };
 
 // ── Readiness wiring (works on both pages) ────────────────────────────────

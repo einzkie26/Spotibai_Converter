@@ -533,6 +533,7 @@ function publicJob(job) {
 // ── routes ─────────────────────────────────────────────────────────────────
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'templates', 'index.html')));
+app.get('/multitrack', (req, res) => res.sendFile(path.join(__dirname, 'templates', 'multitrack.html')));
 
 app.get('/net-stats', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
@@ -582,6 +583,26 @@ app.post('/convert/:jobId/retry', (req, res) => {
   broadcast(req.params.jobId, { type: 'state', state: 'queued' });
   enqueueConversions([{ jobId: req.params.jobId, retryIndices: indices }]);
   res.status(202).json({ job_id: req.params.jobId, state: 'queued' });
+});
+
+app.delete('/convert/:jobId', (req, res) => {
+  const job = JOBS.get(req.params.jobId);
+  if (!job) return res.json({ ok: true });
+  if (!['complete', 'error', 'interrupted'].includes(job.state)) {
+    return res.status(409).json({ error: 'Wait for this conversion to finish before removing it.' });
+  }
+  if (job.jobDir) {
+    const resolved = path.resolve(job.jobDir);
+    const tempRoot = path.resolve(os.tmpdir());
+    if (path.dirname(resolved) !== tempRoot || !path.basename(resolved).startsWith('convotify-')) {
+      return res.status(409).json({ error: 'The conversion files are outside the app workspace and were not removed.' });
+    }
+    try { fs.rmSync(resolved, { recursive: true, force: true }); }
+    catch { return res.status(500).json({ error: 'Could not remove the conversion files. Close any files using them and retry.' }); }
+  }
+  for (const client of job.sseClients || []) client.end();
+  JOBS.delete(req.params.jobId);
+  res.json({ ok: true });
 });
 
 // SSE status stream
@@ -645,7 +666,7 @@ app.get('/convert/:jobId/tracks/:index/download', (req, res) => {
   const job = JOBS.get(req.params.jobId);
   const idx = parseInt(req.params.index, 10);
   const stem = (req.query.stem || '').toLowerCase();
-  if (stem) return res.status(410).json({ error: 'Vocal and instrumental downloads are available in the library.', library_url: '/library' });
+  if (stem) return res.status(410).json({ error: 'Separated track layers are available in the library.', library_url: '/library' });
   if (!job) return res.status(404).json({ error: 'Job not found.' });
   if (!job.outputDir || idx < 0 || idx >= job.tracks.length) return res.status(404).json({ error: 'Track not found.' });
 

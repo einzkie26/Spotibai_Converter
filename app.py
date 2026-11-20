@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import os
 import queue
 import re
@@ -37,13 +38,13 @@ from mutagen.flac import FLAC, Picture
 from mutagen.mp4 import MP4, MP4Cover
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 
 LIBRARY_DIR = Path(os.environ.get("CONVOTIFY_LIBRARY_DIR", Path(__file__).parent / "library"))
 LIBRARY_DIR.mkdir(exist_ok=True)
 LIBRARY_DB  = LIBRARY_DIR / "library.db"
 JOBS_DIR    = Path(os.environ.get("CONVOTIFY_JOBS_DIR", "jobs"))
-JOBS_DIR.mkdir(exist_ok=True)
+JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _db() -> sqlite3.Connection:
@@ -163,7 +164,7 @@ QUEUE_LOCK = threading.Lock()
 QUEUE_WORKER = None
 FORMATS = {"mp3", "wav", "aac", "flac", "alac"}
 BITRATES = {"96": "96k", "160": "160k", "320": "320k"}
-STEM_CHOICES = {"vocals", "instrumental"}
+STEM_CHOICES = {"vocals", "drums", "bass", "piano", "guitar", "other", "instrumental"}
 AUDIO_EXTS = {".mp3", ".wav", ".aac", ".flac", ".m4a"}
 
 
@@ -261,6 +262,7 @@ def _persist_job(job_id: str) -> None:
         "name": job.get("name", ""),
         "batch_id": job.get("batch_id", ""),
         "batch_position": job.get("batch_position", 0),
+        "created_at": job.get("created_at", time.time()),
         "timings": job.get("timings", {}),
         "error": job.get("error", ""),
         "archive_path": str(job["archive_path"]) if job.get("archive_path") else None,
@@ -269,9 +271,13 @@ def _persist_job(job_id: str) -> None:
         "cancelled": list(job.get("cancelled", set())),
         "job_dir":   str(job["job_dir"]) if job.get("job_dir") else None,
         "dest_folder": job.get("dest_folder", ""),
+        "max_download_kbps": job.get("max_download_kbps"),
     }
     try:
-        (JOBS_DIR / f"{job_id}.json").write_text(json.dumps(data), encoding="utf-8")
+        target = JOBS_DIR / f"{job_id}.json"
+        temporary = JOBS_DIR / f".{job_id}.json.tmp"
+        temporary.write_text(json.dumps(data), encoding="utf-8")
+        temporary.replace(target)
     except Exception:
         pass
 
@@ -284,14 +290,19 @@ def _load_persisted_jobs() -> None:
         except Exception:
             continue
         job_id  = data.get("job_id", p.stem)
+        data.setdefault("created_at", p.stat().st_mtime)
         state   = data.get("state", "")
         job_dir = Path(data["job_dir"]) if data.get("job_dir") else None
-        #only resurrect jobs that were mid-flight and whose temp dir still exists
-        recoverable = any(track.get("state") == "error" for track in data.get("tracks", [])) and data.get("metadata")
-        if state in ("complete", "error") and not recoverable:
+        failed_tracks = any(track.get("state") == "error" for track in data.get("tracks", []))
+        archive_path = Path(data["archive_path"]) if data.get("archive_path") else None
+        file_path = Path(data["file_path"]) if data.get("file_path") else None
+        recoverable_failed = state in ("complete", "error") and failed_tracks and data.get("metadata") and data.get("urls")
+        if state in ("complete", "error") and not recoverable_failed:
             p.unlink(missing_ok=True)
             continue
-        if (job_dir is None or not job_dir.exists()) and state != "queued":
+        interrupted = state not in ("complete", "error", "queued")
+        if (job_dir is None or not job_dir.exists()) and state != "queued" and not (
+                (interrupted or recoverable_failed) and data.get("urls")):
             p.unlink(missing_ok=True)
             continue
         with JOBS_LOCK:
@@ -312,13 +323,15 @@ def _load_persisted_jobs() -> None:
                 "name": data.get("name", ""),
                 "batch_id": data.get("batch_id", ""),
                 "batch_position": data.get("batch_position", 0),
+                "created_at": data.get("created_at", p.stat().st_mtime),
+                "max_download_kbps": data.get("max_download_kbps"),
                 "timings": data.get("timings", {}),
                 "error": data.get("error", ""),
-                "archive_path": Path(data["archive_path"]) if data.get("archive_path") else None,
+                "archive_path": archive_path,
                 "track_names": data.get("track_names", []),
             }
-            if data.get("file_path"):
-                JOBS[job_id]["file_path"] = Path(data["file_path"])
+            if file_path:
+                JOBS[job_id]["file_path"] = file_path
             JOBS[job_id]["dest_folder"] = data.get("dest_folder", "")
 
 
@@ -521,6 +534,8 @@ def track_statuses(metadata: list[dict], output_dir: Path, active: set[int],
             "error":        errors.get(i, "") if errors else "",
             "cached":       bool(item.get("cached")),
             "retry_count":  item.get("retry_count", 0),
+            "audio_match":  item.get("fallback_title", ""),
+            "audio_match_album": item.get("fallback_album", ""),
             "message":      "Ready to download" if state == "converted" else
                             "Track skipped" if state == "cancelled" else
                             errors.get(i, "") if state == "error" and errors else
@@ -548,21 +563,51 @@ def download_track(item: dict, output_dir: Path, session: DownloadSession, on_pr
 #main conversion job
 
 def convert_job(job_id: str, playlist_urls: list[str] | str, ffmpeg: Path,
-                output_format: str, bitrate: str, link_type: str, retry_indices=None) -> None:
+                output_format: str, bitrate: str, link_type: str, retry_indices=None,
+                max_download_kbps: float | None = None) -> None:
     started = time.perf_counter()
     if isinstance(playlist_urls, str):
         playlist_urls = [playlist_urls]
 
     with JOBS_LOCK:
         existing_dir = JOBS[job_id].get("job_dir")
+    retry_indices = list(retry_indices) if retry_indices is not None else None
     if existing_dir and Path(existing_dir).exists():
         job_dir = Path(existing_dir)
+        try:
+            job_dir.resolve().relative_to(Path(tempfile.gettempdir()).resolve())
+            stable_dir = JOBS_DIR / f"{job_id}.work"
+            if stable_dir.exists():
+                job_dir = stable_dir
+            else:
+                shutil.move(str(job_dir), str(stable_dir))
+                job_dir = stable_dir
+        except ValueError:
+            pass
+        except OSError:
+            job_dir = JOBS_DIR / f"{job_id}.work"
+            retry_indices = None
         output_dir = job_dir / "tracks"
-        output_dir.mkdir(exist_ok=True)
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Old releases used the OS Temp directory. If Windows blocks that
+            # workspace, start again under the app's durable jobs directory.
+            job_dir = JOBS_DIR / f"{job_id}.work"
+            output_dir = job_dir / "tracks"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            retry_indices = None
     else:
-        job_dir    = Path(tempfile.mkdtemp(prefix="convotify-"))
+        # Keep partial downloads beside the persisted job record so refreshes,
+        # restarts and retries do not depend on Windows' disposable Temp folder.
+        if existing_dir and retry_indices is not None:
+            # The prior Temp workspace vanished; retry the full playlist because
+            # its previously converted tracks are no longer available to package.
+            retry_indices = None
+        job_dir    = JOBS_DIR / f"{job_id}.work"
+        job_dir.mkdir(parents=True, exist_ok=True)
         output_dir = job_dir / "tracks"
-        output_dir.mkdir()
+        output_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["PATH"] = f"{ffmpeg.parent}{os.pathsep}{env.get('PATH', '')}"
     env["SPOTIBAI_FFMPEG"] = str(ffmpeg)
@@ -585,7 +630,8 @@ def convert_job(job_id: str, playlist_urls: list[str] | str, ffmpeg: Path,
         start_times: dict[int, float] = {}
         cover_cache: dict[str, bytes] = {}
         progress_lock = threading.RLock()
-        session = DownloadSession(ffmpeg, output_format, bitrate)
+        session = DownloadSession(ffmpeg, output_format, bitrate,
+                                  max_download_kbps=max_download_kbps)
 
         def refresh_tracks(persist=True):
             with progress_lock:
@@ -726,7 +772,6 @@ def convert_job(job_id: str, playlist_urls: list[str] | str, ffmpeg: Path,
                             "total_s": round(time.perf_counter() - started, 3)})
         if not any(track["state"] == "error" for track in final_statuses):
             (JOBS_DIR / f"{job_id}.json").unlink(missing_ok=True)
-
     except Exception as exc:
         if not JOBS[job_id].get("metadata"):
             remove_tree(job_dir)
@@ -745,7 +790,8 @@ def _conversion_dispatch():
                 job = JOBS.get(job_id)
             if job is not None:
                 convert_job(job_id, job["urls"], ffmpeg, job["format"],
-                            BITRATES[job["bitrate"]], job["link_type"], retry_indices)
+                            BITRATES[job["bitrate"]], job["link_type"], retry_indices,
+                            job.get("max_download_kbps"))
         except Exception as exc:
             update_job(job_id, state="error", error=str(exc), metadata_loading=False)
         finally:
@@ -810,6 +856,11 @@ def index():
     return render_template("index.html")
 
 
+@app.get("/multitrack")
+def multitrack_page():
+    return render_template("multitrack.html")
+
+
 @app.get("/net-stats")
 def net_stats():
     try:
@@ -839,6 +890,13 @@ def convert():
     urls        = [str(u).strip() for u in raw_urls if str(u).strip()]
     fmt         = str(payload.get("format", "mp3")).lower()
     bitrate_key = str(payload.get("bitrate", "160"))
+    raw_download_limit = payload.get("max_download_kbps")
+    try:
+        max_download_kbps = None if raw_download_limit in (None, "") else float(raw_download_limit)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Enter a valid maximum download speed in KB/s."}), 400
+    if max_download_kbps is not None and (not math.isfinite(max_download_kbps) or not 0.1 <= max_download_kbps <= 1_000_000):
+        return jsonify({"error": "The download speed limit must be between 0.1 KB/s and 1,000,000 KB/s."}), 400
 
     if not urls or not all(is_spotify_url(u) for u in urls):
         return jsonify({"error": "Paste valid Spotify playlist, album, or track links."}), 400
@@ -865,8 +923,10 @@ def convert():
             JOBS[job_id] = {"state": "queued", "tracks": [], "total": 0, "completed": 0,
                             "cancelled": set(), "started_at": time.monotonic(), "format": fmt,
                             "bitrate": bitrate_key, "link_type": spotify_link_type(url), "urls": [url],
+                            "max_download_kbps": max_download_kbps,
                             "name": str(hints.get(url, {}).get("name", ""))[:300],
-                            "batch_id": batch_id, "batch_position": position, "dest_folder": dest_folder}
+                            "batch_id": batch_id, "batch_position": position, "created_at": time.time(),
+                            "dest_folder": dest_folder}
             _persist_job(job_id)
             jobs.append({"job_id": job_id, **public_job(JOBS[job_id])})
     enqueue_conversions([(item["job_id"], ffmpeg, None) for item in jobs])
@@ -876,7 +936,7 @@ def convert():
 def public_job(job):
     fields = ("state", "tracks", "total", "completed", "format", "bitrate", "link_type", "timings",
               "cached_tracks", "metadata_loading", "meta_count", "meta_total", "metadata_errors", "archive_name",
-              "name", "urls", "batch_id", "batch_position", "error")
+              "name", "urls", "batch_id", "batch_position", "created_at", "error")
     return {key: job[key] for key in fields if key in job}
 
 
@@ -897,7 +957,7 @@ def retry_failed_tracks(job_id):
         if (not isinstance(indices, list) or not indices or any(type(i) is not int or i not in failed for i in indices)
                 or len(set(indices)) != len(indices)):
             return jsonify({"error": "Choose failed tracks to retry."}), 400
-        if not job.get("metadata") or not job.get("job_dir") or not Path(job["job_dir"]).is_dir():
+        if not job.get("metadata") or not job.get("urls"):
             return jsonify({"error": "This job is no longer available. Add its link again."}), 409
         job["state"] = "queued"
         _persist_job(job_id)
@@ -973,17 +1033,55 @@ def conversion_download(job_id: str):
     resp.headers["X-Download-Name"]    = quote(name)
     if not retain:
         resp.direct_passthrough = False
-        resp.call_on_close(lambda: remove_tree(cleanup_dir))
+        def cleanup_download():
+            remove_tree(cleanup_dir)
+            (JOBS_DIR / f"{job_id}.json").unlink(missing_ok=True)
+        resp.call_on_close(cleanup_download)
         with JOBS_LOCK:
             JOBS.pop(job_id, None)
     return resp
+
+
+@app.delete("/convert/<job_id>")
+def remove_conversion(job_id: str):
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if job is None:
+            (JOBS_DIR / f"{job_id}.json").unlink(missing_ok=True)
+            return jsonify({"ok": True})
+        if job.get("state") not in ("complete", "error", "interrupted"):
+            return jsonify({"error": "Only finished or interrupted conversions can be removed."}), 409
+        job_dir = Path(job["job_dir"]) if job.get("job_dir") else None
+        JOBS.pop(job_id, None)
+
+    if job_dir and job_dir.exists():
+        resolved = job_dir.resolve()
+        jobs_root = JOBS_DIR.resolve()
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        owned_workspace = (
+            resolved != jobs_root and jobs_root in resolved.parents
+        ) or (
+            resolved.parent == temp_root and resolved.name.startswith("convotify-")
+        )
+        if not owned_workspace:
+            with JOBS_LOCK:
+                JOBS[job_id] = job
+            return jsonify({"error": "The conversion files are outside the app workspace and were not removed."}), 409
+        remove_tree(resolved)
+        if resolved.exists():
+            with JOBS_LOCK:
+                JOBS[job_id] = job
+            return jsonify({"error": "Could not remove the conversion files. Close any files using them and retry."}), 500
+    (JOBS_DIR / f"{job_id}.json").unlink(missing_ok=True)
+    (JOBS_DIR / f".{job_id}.json.tmp").unlink(missing_ok=True)
+    return jsonify({"ok": True})
 
 
 @app.get("/convert/<job_id>/tracks/<int:idx>/download")
 def track_download(job_id: str, idx: int):
     stem_req = request.args.get("stem", "").lower()
     if stem_req:
-        return jsonify({"error": "Vocal and instrumental downloads are available in the library.",
+        return jsonify({"error": "Separated track layers are available in the library.",
                         "library_url": "/library"}), 410
     with JOBS_LOCK:
         job = JOBS.get(job_id)
@@ -1006,7 +1104,7 @@ def track_download(job_id: str, idx: int):
 
 @app.post("/convert/<job_id>/tracks/<int:idx>/separate")
 def separate_track(job_id: str, idx: int):
-    return jsonify({"error": "Vocal and instrumental downloads are available in the library.",
+    return jsonify({"error": "Separated track layers are available in the library.",
                     "library_url": "/library"}), 410
 
 
@@ -1014,8 +1112,9 @@ def separate_track(job_id: str, idx: int):
 def list_jobs():
     """Restore collection panels, including failures awaiting manual retry."""
     with JOBS_LOCK:
-        out = [{"job_id": jid, **public_job(job)} for jid, job in JOBS.items()]
-    return jsonify(out)
+        out = [{"job_id": jid, **public_job(job)} for jid, job in JOBS.items()
+               if job.get("state") != "complete" or any(track.get("state") == "error" for track in job.get("tracks", []))]
+    return jsonify(sorted(out, key=lambda job: (job.get("created_at", 0), job.get("batch_position", 0))))
 
 
 @app.post("/convert/<job_id>/resume")
@@ -1110,7 +1209,7 @@ def library_clear_cache():
     try:
         with FileLock(str(LIBRARY_DIR / ".cache-maintenance.lock"), timeout=0), STEM_SERVICE.lock:
             if any(job["state"] in ("queued", "running") for job in STEM_SERVICE.jobs.values()):
-                return jsonify({"error": "Wait for vocal and instrumental preparation to finish before clearing cache."}), 409
+                return jsonify({"error": "Wait for stem preparation to finish before clearing cache."}), 409
             with closing(_db()) as con:
                 names = [row["filename"] for row in con.execute("SELECT filename FROM tracks")]
             result = clear_generated_audio(LIBRARY_DIR, names)
@@ -1140,7 +1239,7 @@ def library_separate(track_id: int):
     payload = request.get_json(silent=True) or {}
     stem = str(payload.get("stem", "")).lower()
     if stem not in STEM_CHOICES:
-        return jsonify({"error": "Choose vocals or instrumental."}), 400
+        return jsonify({"error": "Choose a valid separated layer."}), 400
     row = _library_row(track_id)
     if row is None:
         return jsonify({"error": "Track not found."}), 404
@@ -1218,7 +1317,7 @@ def library_download(track_id: int):
         if path is None:
             return jsonify({"error": "Prepare this stem from the library download menu first."}), 409
     elif stem_req:
-        return jsonify({"error": "Choose original, vocals or instrumental."}), 400
+        return jsonify({"error": "Choose original audio or a valid separated layer."}), 400
     if not path.exists():
         return jsonify({"error": "File missing from library."}), 404
     return send_file(path, as_attachment=True, download_name=path.name, mimetype="audio/*")
@@ -1229,7 +1328,7 @@ def library_preview(track_id: int):
     """Play the selected original or prepared stem without downloading the full file."""
     stem = request.args.get("stem", "").lower()
     if stem and stem not in STEM_CHOICES:
-        return jsonify({"error": "Choose original, vocals or instrumental."}), 400
+        return jsonify({"error": "Choose original audio or a valid separated layer."}), 400
     with closing(_db()) as con, con:
         row = con.execute("SELECT * FROM tracks WHERE id=?", (track_id,)).fetchone()
     if row is None:
