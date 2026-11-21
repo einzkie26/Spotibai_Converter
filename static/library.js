@@ -66,16 +66,30 @@ const sourceLabels = { '': 'Original', vocals: 'Vocals', instrumental: 'Instrume
 
 const libraryArt = document.querySelector('.lib-hero-art');
 if (libraryArt && matchMedia('(hover: hover) and (pointer: fine)').matches && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  let libraryArtFrame = 0;
+  let pendingLibraryPointer = null;
   libraryArt.addEventListener('pointermove', event => {
-    const bounds = libraryArt.getBoundingClientRect();
-    const x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
-    const y = ((event.clientY - bounds.top) / bounds.height) * 2 - 1;
-    libraryArt.style.setProperty('--parallax-x', `${(x * 9).toFixed(1)}px`);
-    libraryArt.style.setProperty('--parallax-y', `${(y * 7).toFixed(1)}px`);
-    libraryArt.style.setProperty('--tilt-x', `${(-y * 5).toFixed(1)}deg`);
-    libraryArt.style.setProperty('--tilt-y', `${(x * 6).toFixed(1)}deg`);
+    pendingLibraryPointer = { x: event.clientX, y: event.clientY };
+    if (libraryArtFrame) return;
+    libraryArtFrame = requestAnimationFrame(() => {
+      libraryArtFrame = 0;
+      const pointer = pendingLibraryPointer;
+      pendingLibraryPointer = null;
+      if (!pointer) return;
+      const bounds = libraryArt.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+      const x = ((pointer.x - bounds.left) / bounds.width) * 2 - 1;
+      const y = ((pointer.y - bounds.top) / bounds.height) * 2 - 1;
+      libraryArt.style.setProperty('--parallax-x', `${(x * 6).toFixed(1)}px`);
+      libraryArt.style.setProperty('--parallax-y', `${(y * 5).toFixed(1)}px`);
+      libraryArt.style.setProperty('--tilt-x', `${(-y * 3).toFixed(1)}deg`);
+      libraryArt.style.setProperty('--tilt-y', `${(x * 4).toFixed(1)}deg`);
+    });
   });
   libraryArt.addEventListener('pointerleave', () => {
+    pendingLibraryPointer = null;
+    if (libraryArtFrame) cancelAnimationFrame(libraryArtFrame);
+    libraryArtFrame = 0;
     libraryArt.style.setProperty('--parallax-x', '0px');
     libraryArt.style.setProperty('--parallax-y', '0px');
     libraryArt.style.setProperty('--tilt-x', '0deg');
@@ -542,10 +556,10 @@ function syncPreviewArt(playing) {
   if (playing) {
     if (!previewCoverAnimation) {
       previewCoverAnimation = previewCover.animate([
-        { transform: 'perspective(900px) rotateX(0deg) rotateY(0deg) translateY(0) scale(1)', filter: 'brightness(1)' },
-        { transform: 'perspective(900px) rotateX(7deg) rotateY(-9deg) translateY(-5px) scale(1.06)', filter: 'brightness(1.12)', offset: .35 },
-        { transform: 'perspective(900px) rotateX(-5deg) rotateY(8deg) translateY(-2px) scale(1.035)', filter: 'brightness(1.06)', offset: .72 },
-        { transform: 'perspective(900px) rotateX(0deg) rotateY(0deg) translateY(0) scale(1)', filter: 'brightness(1)' },
+        { transform: 'perspective(900px) rotateX(0deg) rotateY(0deg) translateY(0) scale(1)' },
+        { transform: 'perspective(900px) rotateX(3deg) rotateY(-4deg) translateY(-2px) scale(1.025)', offset: .35 },
+        { transform: 'perspective(900px) rotateX(-2deg) rotateY(3deg) translateY(-1px) scale(1.015)', offset: .72 },
+        { transform: 'perspective(900px) rotateX(0deg) rotateY(0deg) translateY(0) scale(1)' },
       ], { duration: 7000, easing: 'ease-in-out', fill: 'both' });
     }
     previewCoverAnimation.currentTime = Math.min(7000, (previewAudio.currentTime || 0) * 1000);

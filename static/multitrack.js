@@ -21,6 +21,13 @@ const trackSelect = document.querySelector('#mt-track-select');
 const sourceSelect = document.querySelector('#mt-source-select');
 const addButton = document.querySelector('#mt-add-track');
 const statusEl = document.querySelector('#mt-status');
+const statusTextEl = document.querySelector('#mt-status-text');
+const operationProgress = document.querySelector('#mt-operation-progress');
+const operationProgressFill = operationProgress.querySelector('span');
+const studioStateEl = document.querySelector('#mt-studio-state');
+const studioStateTextEl = document.querySelector('#mt-studio-state-text');
+const audioIndicator = document.querySelector('#mt-audio-indicator');
+const mixIndicator = document.querySelector('#mt-mix-indicator');
 const lanesEl = document.querySelector('#mt-lanes');
 const emptyEl = document.querySelector('#mt-empty');
 const laneCountEl = document.querySelector('#mt-lane-count');
@@ -47,12 +54,41 @@ let playPosition = 0;
 let playbackStartedAt = 0;
 let playbackStartPosition = 0;
 let isPlaying = false;
-let animationFrame = 0;
+let audioError = false;
+let playbackTimer = 0;
+let lastPlaybackUiUpdate = -Infinity;
 let isBusy = false;
+let isExporting = false;
 let sessionLoading = false;
 let mixArranged = false;
 const gateContexts = new WeakSet();
 const SAVED_MIX_KEY = 'spotibai-multitrack-mix-v1';
+
+function setStatus(message, state = 'info', progress = null) {
+  statusTextEl.textContent = message;
+  statusEl.dataset.state = state;
+  const working = state === 'working';
+  statusEl.setAttribute('aria-busy', String(working));
+  operationProgress.hidden = !working;
+  if (working && progress !== null && progress !== undefined && Number.isFinite(Number(progress))) {
+    const pct = Math.max(0, Math.min(100, Number(progress)));
+    operationProgress.dataset.indeterminate = 'false';
+    operationProgress.setAttribute('aria-valuenow', String(Math.round(pct)));
+    operationProgress.setAttribute('aria-valuetext', `${Math.round(pct)} percent`);
+    operationProgressFill.style.width = `${pct}%`;
+  } else if (working) {
+    operationProgress.dataset.indeterminate = 'true';
+    operationProgress.removeAttribute('aria-valuenow');
+    operationProgress.setAttribute('aria-valuetext', 'In progress');
+    operationProgressFill.style.width = '';
+  } else {
+    operationProgress.removeAttribute('aria-valuenow');
+    operationProgress.removeAttribute('aria-valuetext');
+    operationProgressFill.style.width = '0%';
+  }
+  studioStateEl.dataset.state = state;
+  studioStateTextEl.textContent = state === 'working' ? 'WORKING' : ['error', 'warning'].includes(state) ? 'NEEDS ATTENTION' : state === 'success' ? 'READY' : 'STANDBY';
+}
 
 async function ensureGateProcessor(context) {
   if (!context.audioWorklet) return false;
@@ -202,6 +238,7 @@ async function readJson(response, fallback) {
 }
 
 async function loadLibrary() {
+  setStatus('Checking your Library…', 'working');
   try {
     const response = await fetch('/library/tracks');
     const items = await readJson(response, 'Could not load Library tracks.');
@@ -211,12 +248,12 @@ async function loadLibrary() {
       const label = `${track.artist || 'Unknown artist'} — ${track.title || 'Untitled'}`;
       trackSelect.add(new Option(label, track.id));
     });
-    addButton.disabled = !items.length;
-    statusEl.textContent = items.length ? `${items.length} track${items.length === 1 ? '' : 's'} available.` : 'Convert audio first, then add it from your Library.';
+    setStatus(items.length ? `${items.length} track${items.length === 1 ? '' : 's'} available.` : 'Convert audio first, then add it from your Library.', items.length ? 'success' : 'info');
   } catch (error) {
     trackSelect.replaceChildren(new Option('Library could not be loaded', ''));
-    statusEl.textContent = safeMessage(error, 'Could not load Library tracks.');
+    setStatus(safeMessage(error, 'Could not load Library tracks.'), 'error');
   }
+  updateControls();
 }
 
 function getAudioContext() {
@@ -233,23 +270,34 @@ function getAudioContext() {
 function updateControls() {
   const length = Math.max(0, ...lanes.map(lane => lane.offset + laneDuration(lane)));
   laneCountEl.textContent = `${lanes.length} lane${lanes.length === 1 ? '' : 's'}`;
+  const audioLabel = audioIndicator.querySelector('em');
+  const audioState = audioError ? 'error' : isPlaying ? 'playing' : !lanes.length ? 'idle' : playPosition >= length && length > 0 ? 'complete' : playPosition > 0 ? 'paused' : 'ready';
+  audioLabel.textContent = ({ playing: 'Playing', paused: 'Paused', complete: 'Playback complete', ready: 'Ready to play', idle: 'No lanes', error: 'Playback unavailable' })[audioState];
+  audioIndicator.dataset.state = audioState;
+  const mixLabel = mixIndicator.querySelector('em');
+  mixLabel.textContent = mixArranged ? 'Transitions arranged' : lanes.length >= 2 ? 'Sequential lanes' : 'Add two lanes';
+  mixIndicator.dataset.state = mixArranged ? 'active' : lanes.length >= 2 ? 'ready' : 'idle';
   emptyEl.hidden = lanes.length > 0;
   playButton.disabled = lanes.length === 0 || isBusy || sessionLoading;
   stopButton.disabled = lanes.length === 0 || isBusy || sessionLoading;
   exportButton.disabled = lanes.length === 0 || isBusy || sessionLoading;
+  exportButton.textContent = isBusy && isExporting ? 'Rendering WAV…' : 'Export WAV';
+  exportButton.setAttribute('aria-busy', String(isBusy && isExporting));
   seek.disabled = lanes.length === 0 || isBusy || sessionLoading;
   seek.max = String(length);
   seek.value = String(Math.min(playPosition, length));
   timeLabel.textContent = `${formatTime(playPosition)} / ${formatTime(length)}`;
   playButton.textContent = isPlaying ? 'Ⅱ' : '▶';
   playButton.setAttribute('aria-label', isPlaying ? 'Pause mix' : 'Play mix');
-  addButton.disabled = isBusy || sessionLoading || !tracks.size;
+  addButton.disabled = isBusy || sessionLoading || !tracks.size || !trackSelect.value;
   arrangeButton.disabled = isBusy || sessionLoading || lanes.length < 2;
   mixToggle.disabled = isBusy || sessionLoading || lanes.length < 2;
   mixToggle.textContent = mixArranged ? 'Turn Mix off' : 'Turn Mix on';
   saveMixButton.disabled = isBusy || sessionLoading || lanes.length === 0;
-  loadMixButton.disabled = isBusy || sessionLoading || !savedMixAvailable();
+  loadMixButton.disabled = isBusy || sessionLoading || !tracks.size || !savedMixAvailable();
 }
+
+trackSelect.addEventListener('change', updateControls);
 
 function savedMixAvailable() {
   try { return Boolean(localStorage.getItem(SAVED_MIX_KEY)); }
@@ -502,6 +550,14 @@ function renderLane(lane) {
   frequencyLabel.append(frequency);
   processingControls.append(effectLabel, frequencyLabel);
   if (lane.voice) {
+    const gateStatus = document.createElement('span');
+    gateStatus.className = 'multitrack-feature-status';
+    gateStatus.dataset.state = lane.gateAvailable ? 'ready' : 'unavailable';
+    gateStatus.textContent = lane.gateAvailable ? 'Noise gate ready' : 'Noise gate unavailable';
+    gateStatus.title = lane.gateAvailable
+      ? 'Noise reduction and room-tail controls are active for this vocal lane.'
+      : 'This browser could not load the audio worklet. Noise reduction and room-tail controls are disabled.';
+    processingControls.append(gateStatus);
     const makeVoiceControl = (name, key, max, description) => {
       const label = document.createElement('label');
       label.title = description;
@@ -509,11 +565,12 @@ function renderLane(lane) {
       const input = document.createElement('input');
       input.type = 'range'; input.min = '0'; input.max = String(max); input.step = '1'; input.value = String(lane[key]);
       input.setAttribute('aria-label', `${name} for ${lane.title}`);
+      if ((key === 'noiseReduction' || key === 'echoTrim') && !lane.gateAvailable) input.disabled = true;
       input.addEventListener('input', () => { lane[key] = Number(input.value); syncLaneProcessing(lane); });
       label.append(input);
       return label;
     };
-    processingSummary.textContent = 'EQ, vocal cleanup & effects';
+    processingSummary.textContent = lane.gateAvailable ? 'EQ, vocal cleanup & effects' : 'EQ & effects · vocal cleanup unavailable';
     processingControls.append(
       makeVoiceControl('Noise reduction', 'noiseReduction', 100, 'Closes the gate on quiet background noise between phrases.'),
       makeVoiceControl('Room tail', 'echoTrim', 100, 'Tightens the gate release to reduce quiet reverb tails between phrases.'),
@@ -613,8 +670,9 @@ function startSources() {
   playbackStartPosition = playPosition;
   isPlaying = true;
   updateControls();
-  cancelAnimationFrame(animationFrame);
-  animationFrame = requestAnimationFrame(tickPlayback);
+  clearTimeout(playbackTimer);
+  lastPlaybackUiUpdate = -Infinity;
+  playbackTimer = window.setTimeout(tickPlayback, 50);
 }
 
 function restartPlayback() {
@@ -624,7 +682,8 @@ function restartPlayback() {
   startSources();
 }
 
-function tickPlayback() {
+function tickPlayback(frameTime = performance.now()) {
+  playbackTimer = 0;
   if (!isPlaying) return;
   playPosition = audioContext.currentTime - playbackStartedAt + playbackStartPosition;
   const end = Math.max(0, ...lanes.map(lane => lane.offset + laneDuration(lane)));
@@ -635,8 +694,12 @@ function tickPlayback() {
     updateControls();
     return;
   }
-  updateControls();
-  animationFrame = requestAnimationFrame(tickPlayback);
+  if (frameTime - lastPlaybackUiUpdate >= 100) {
+    seek.value = String(Math.min(playPosition, end));
+    timeLabel.textContent = `${formatTime(playPosition)} / ${formatTime(end)}`;
+    lastPlaybackUiUpdate = frameTime;
+  }
+  playbackTimer = window.setTimeout(tickPlayback, 50);
 }
 
 function pausePlayback() {
@@ -644,7 +707,8 @@ function pausePlayback() {
   playPosition = audioContext.currentTime - playbackStartedAt + playbackStartPosition;
   stopSources();
   isPlaying = false;
-  cancelAnimationFrame(animationFrame);
+  clearTimeout(playbackTimer);
+  playbackTimer = 0;
   updateControls();
 }
 
@@ -652,20 +716,22 @@ function stopPlayback() {
   stopSources();
   isPlaying = false;
   playPosition = 0;
-  cancelAnimationFrame(animationFrame);
+  clearTimeout(playbackTimer);
+  playbackTimer = 0;
   updateControls();
 }
 
 playButton.addEventListener('click', async () => {
   if (isPlaying) { pausePlayback(); return; }
   if (!lanes.length) return;
+  audioError = false;
   try {
     const context = getAudioContext();
     if (context.state === 'suspended') await context.resume();
     const end = Math.max(...lanes.map(lane => lane.offset + laneDuration(lane)));
     if (playPosition >= end) playPosition = 0;
     startSources();
-  } catch (error) { statusEl.textContent = safeMessage(error, 'Audio playback could not start.'); }
+  } catch (error) { audioError = true; updateControls(); setStatus(safeMessage(error, 'Audio playback could not start.'), 'error'); }
 });
 stopButton.addEventListener('click', stopPlayback);
 seek.addEventListener('input', () => {
@@ -776,7 +842,7 @@ function arrangeMix(showStatus = true) {
     const description = transitionStyle.value === 'auto'
       ? `Auto selected ${transitionTypes.join(', ') || 'fade'} from the approximate tempo and key matches.`
       : `Arranged ${lanes.length} lanes with ${transitionStyle.options[transitionStyle.selectedIndex].text.toLowerCase()} transitions.`;
-    statusEl.textContent = description;
+    setStatus(description, 'success');
   }
   updateControls();
   if (wasPlaying) startSources();
@@ -796,7 +862,7 @@ mixToggle.addEventListener('click', () => {
     const position = lanesEl.querySelector(`[data-id="${lane.id}"] .mt-position input`);
     if (position) position.value = lane.offset.toFixed(1);
   });
-  statusEl.textContent = 'Mix transitions are off. The lanes play in order without overlap.';
+  setStatus('Mix transitions are off. The lanes play in order without overlap.', 'success');
   updateControls();
   if (wasPlaying) startSources();
 });
@@ -811,15 +877,16 @@ transitionStyle.addEventListener('change', () => {
 });
 
 async function prepareStem(trackId, stem) {
-  statusEl.textContent = `Preparing ${stem} layer…`;
+  setStatus(`Requesting ${stemLabel(stem).toLowerCase()} separation…`, 'working');
   const response = await fetch(`/library/tracks/${trackId}/separate`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stem }),
+    method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stem }),
   });
   const job = await readJson(response, `Could not prepare ${stem}.`);
+  if (!job.sep_id) throw new Error('The separation service did not return a job ID.');
   for (;;) {
-    const progressResponse = await fetch(`/library/tracks/${trackId}/separate/${job.sep_id}/status`);
+    const progressResponse = await fetch(`/library/tracks/${trackId}/separate/${job.sep_id}/status`, { cache: 'no-store' });
     const progress = await readJson(progressResponse, 'Separation progress is unavailable.');
-    statusEl.textContent = progress.msg || `Preparing ${stem}…`;
+    setStatus(`${stemLabel(stem)}: ${progress.msg || 'Preparing audio…'}${progress.pct !== null && progress.pct !== undefined && Number.isFinite(Number(progress.pct)) ? ` · ${Math.round(progress.pct)}%` : ''}`, 'working', progress.pct);
     if (progress.state === 'done') return;
     if (progress.state === 'error') throw new Error(progress.msg || 'Audio separation failed.');
     await new Promise(resolve => window.setTimeout(resolve, 900));
@@ -828,8 +895,8 @@ async function prepareStem(trackId, stem) {
 
 async function addLane(trackIdOverride = null, sourceOverride = null, settings = null) {
   const track = tracks.get(String(trackIdOverride ?? trackSelect.value));
-  if (!track || isBusy || (sessionLoading && !settings)) return;
-  if (lanes.length >= 12) { statusEl.textContent = 'This session is limited to 12 lanes to protect memory.'; return; }
+  if (!track || isBusy || (sessionLoading && !settings)) return false;
+  if (lanes.length >= 12) { setStatus('This session is limited to 12 lanes to protect memory.', 'warning'); return false; }
   const stem = sourceOverride ?? sourceSelect.value;
   const sourceLabel = stemLabel(stem);
   isBusy = true;
@@ -838,12 +905,12 @@ async function addLane(trackIdOverride = null, sourceOverride = null, settings =
   try {
     if (stem) await prepareStem(track.id, stem);
     const gateAvailable = stem === 'vocals' ? await ensureGateProcessor(getAudioContext()) : false;
-    statusEl.textContent = `Loading ${sourceLabel.toLowerCase()} audio into the editor…`;
+    setStatus(`Loading ${sourceLabel.toLowerCase()} audio into the editor…`, 'working');
     const response = await fetch(`/library/tracks/${track.id}/download${stem ? `?stem=${encodeURIComponent(stem)}` : ''}`);
     if (!response.ok) await readJson(response, 'The audio file could not be loaded.');
     const data = await response.arrayBuffer();
     const buffer = await getAudioContext().decodeAudioData(data);
-    statusEl.textContent = 'Estimating tempo and key…';
+    setStatus('Audio loaded. Estimating tempo and key…', 'working');
     const analysis = analyzeAudio(buffer);
     const trimStart = Math.max(0, Math.min(buffer.duration - 0.1, Number(settings?.trimStart) || 0));
     const trimEnd = Math.min(buffer.duration, Math.max(trimStart + 0.1, Number(settings?.trimEnd) || buffer.duration));
@@ -865,11 +932,13 @@ async function addLane(trackIdOverride = null, sourceOverride = null, settings =
     lanes.push(lane);
     renderLane(lane);
     if (mixArranged && lanes.length > 1) arrangeMix(false);
-    statusEl.textContent = `${sourceLabel} added. All lanes start at the same timeline position.`;
+    setStatus(`${sourceLabel} added. All lanes start at the same timeline position.`, 'success');
+    return true;
   } catch (error) {
     const message = safeMessage(error, 'Could not add this layer.');
-    statusEl.textContent = message.includes('CPU') || message.includes('RAM') || message.includes('readiness')
-      ? `${message} Open Converter → Settings to run the CPU & RAM test.` : message;
+    setStatus(message.includes('CPU') || message.includes('RAM') || message.includes('readiness')
+      ? `${message} Open Converter → Settings to run the CPU & RAM test.` : message, 'error');
+    return false;
   } finally {
     isBusy = false;
     updateControls();
@@ -903,15 +972,15 @@ saveMixButton.addEventListener('click', () => {
       })),
     };
     localStorage.setItem(SAVED_MIX_KEY, JSON.stringify(saved));
-    statusEl.textContent = 'Mix session saved in this browser. Use Load saved mix to reopen it.';
-  } catch (error) { statusEl.textContent = safeMessage(error, 'The mix could not be saved in browser storage.'); }
+    setStatus('Mix session saved in this browser. Use Load saved mix to reopen it.', 'success');
+  } catch (error) { setStatus(safeMessage(error, 'The mix could not be saved in browser storage.'), 'error'); }
   updateControls();
 });
 
 loadMixButton.addEventListener('click', async () => {
   let saved;
   try { saved = JSON.parse(localStorage.getItem(SAVED_MIX_KEY) || 'null'); }
-  catch { statusEl.textContent = 'The saved mix file is invalid. Save the current mix to replace it.'; return; }
+  catch { setStatus('The saved mix file is invalid. Save the current mix to replace it.', 'error'); return; }
   if (!saved?.lanes?.length) return;
   sessionLoading = true;
   stopPlayback();
@@ -927,15 +996,17 @@ loadMixButton.addEventListener('click', async () => {
   crossfadeValue.textContent = `${crossfade.value} sec`;
   mixArranged = false;
   updateControls();
+  let failedLanes = 0;
   try {
     for (const lane of saved.lanes.slice(0, 12)) {
       const source = ['vocals', 'drums', 'bass', 'piano', 'guitar', 'other', 'instrumental'].includes(lane.source)
         ? lane.source : ({ Vocals: 'vocals', Instrumental: 'instrumental', 'Drums / Beats': 'drums' })[lane.source] || '';
-      await addLane(lane.trackId, source, lane);
+      if (!await addLane(lane.trackId, source, lane)) failedLanes++;
     }
     if (saved.mixArranged && lanes.length > 1) arrangeMix(false);
-    statusEl.textContent = `Loaded ${lanes.length} saved lane${lanes.length === 1 ? '' : 's'}.`;
-  } catch (error) { statusEl.textContent = safeMessage(error, 'The saved mix could not be loaded.'); }
+    if (failedLanes) setStatus(`Restored ${lanes.length} lane${lanes.length === 1 ? '' : 's'}; ${failedLanes} could not be loaded. Check the track files and retry those lanes.`, lanes.length ? 'warning' : 'error');
+    else setStatus(`Loaded ${lanes.length} saved lane${lanes.length === 1 ? '' : 's'}.`, 'success');
+  } catch (error) { setStatus(safeMessage(error, 'The saved mix could not be loaded.'), 'error'); }
   finally { sessionLoading = false; updateControls(); }
 });
 
@@ -967,14 +1038,16 @@ exportButton.addEventListener('click', async () => {
   if (!lanes.length || isBusy) return;
   if (isPlaying) pausePlayback();
   isBusy = true;
+  isExporting = true;
   updateControls();
-  statusEl.textContent = 'Rendering the mix to WAV…';
+  setStatus('Rendering the mix to WAV. This may take a moment…', 'working');
   try {
     const sampleRate = 44100;
     const lengthSeconds = Math.max(...lanes.map(lane => lane.offset + laneDuration(lane)));
     if (lengthSeconds > 900) throw new Error('WAV export is limited to 15 minutes per session.');
     const offline = new OfflineAudioContext(2, Math.ceil(lengthSeconds * sampleRate), sampleRate);
     const offlineGateAvailable = await ensureGateProcessor(offline);
+    const vocalCleanupOmitted = !offlineGateAvailable && lanes.some(lane => lane.voice && lane.gateAvailable && laneIsAudible(lane));
     const offlineMaster = offline.createGain();
     offlineMaster.gain.value = Number(master.value);
     offlineMaster.connect(offline.destination);
@@ -1015,17 +1088,24 @@ exportButton.addEventListener('click', async () => {
     anchor.download = 'spotibai-multitrack-mix.wav';
     anchor.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 2000);
-    statusEl.textContent = 'Mix exported as a 16-bit stereo WAV file.';
-  } catch (error) { statusEl.textContent = safeMessage(error, 'WAV export failed.'); }
-  finally { isBusy = false; updateControls(); }
+    setStatus(vocalCleanupOmitted
+      ? 'WAV exported, but this browser could not apply vocal noise cleanup in the offline renderer.'
+      : 'Mix exported as a 16-bit stereo WAV file.', vocalCleanupOmitted ? 'warning' : 'success');
+  } catch (error) { setStatus(safeMessage(error, 'WAV export failed.'), 'error'); }
+  finally { isBusy = false; isExporting = false; updateControls(); }
 });
 
+let waveformResizeFrame = 0;
 window.addEventListener('resize', () => {
-  lanesEl.querySelectorAll('.multitrack-waveform').forEach((canvas, index) => {
-    const lane = lanes.find(item => item.id === Number(canvas.closest('.multitrack-lane')?.dataset.id));
-    if (lane) drawWaveform(canvas, lane.buffer);
+  if (waveformResizeFrame) return;
+  waveformResizeFrame = requestAnimationFrame(() => {
+    waveformResizeFrame = 0;
+    lanesEl.querySelectorAll('.multitrack-waveform').forEach(canvas => {
+      const lane = lanes.find(item => item.id === Number(canvas.closest('.multitrack-lane')?.dataset.id));
+      if (lane) drawWaveform(canvas, lane.buffer);
+    });
   });
-});
+}, { passive: true });
 
 updateControls();
 loadLibrary();

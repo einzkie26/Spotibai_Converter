@@ -26,15 +26,26 @@
     </header>
 
     <section class="multitrack-hero">
-      <span class="multitrack-kicker">Audio workspace</span>
-      <h1>Multitrack<br><em>Editing</em></h1>
-      <p>Separate a Library track into vocal, drum, bass, piano and other instrument lanes. Shape and mix each layer, arrange transitions, compare approximate BPM and key, and export as WAV.</p>
+      <div class="multitrack-hero-copy">
+        <h1>Make room<br>for every <em>layer.</em></h1>
+        <p>Build a mix from vocals, drums, bass, piano and more. Shape each stem, arrange transitions, then export your session as WAV.</p>
+      </div>
+      <aside class="multitrack-studio-card" aria-label="Multitrack studio overview">
+        <div class="multitrack-studio-top"><span>SPOTIBAI STUDIO</span><span>01 <i></i> 04</span></div>
+        <div class="multitrack-signal" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        </div>
+        <div class="multitrack-studio-bottom">
+          <div><strong>STEM SEPARATION</strong><span>Vocal · rhythm · instruments</span></div>
+          <span class="multitrack-studio-state" id="mt-studio-state" data-state="loading"><i></i><span id="mt-studio-state-text">CHECKING LIBRARY</span></span>
+        </div>
+      </aside>
     </section>
 
     <section class="multitrack-source" aria-labelledby="mt-source-title">
       <div class="multitrack-section-title">
-        <div><span class="multitrack-kicker">01 / Add audio</span><h2 id="mt-source-title">Choose a Library track</h2></div>
-        <a href="/library">Manage Library →</a>
+        <div><span class="multitrack-kicker">01 / Source</span><h2 id="mt-source-title">Start with a track</h2></div>
+        <a href="/library">Browse library <span aria-hidden="true">↗</span></a>
       </div>
       <div class="multitrack-source-controls">
         <label>Track
@@ -54,13 +65,18 @@
         </label>
         <button id="mt-add-track" class="multitrack-add" type="button" disabled>Add lane <span>+</span></button>
       </div>
-      <p id="mt-status" class="multitrack-status" role="status" aria-live="polite">Loading tracks from your Library…</p>
+      <p id="mt-status" class="multitrack-status" data-state="working" role="status" aria-live="polite" aria-atomic="true"><i aria-hidden="true"></i><span id="mt-status-text">Loading tracks from your Library…</span></p>
+      <div id="mt-operation-progress" class="multitrack-operation-progress" role="progressbar" aria-label="Current multitrack operation" aria-valuemin="0" aria-valuemax="100" hidden><span></span></div>
     </section>
 
     <section class="multitrack-editor" aria-labelledby="mt-editor-title">
       <div class="multitrack-section-title">
-        <div><span class="multitrack-kicker">02 / Arrange and mix</span><h2 id="mt-editor-title">Your session</h2></div>
+        <div><span class="multitrack-kicker">02 / Arrange &amp; mix</span><h2 id="mt-editor-title">Session timeline</h2></div>
         <span id="mt-lane-count" class="multitrack-lane-count">0 lanes</span>
+      </div>
+      <div class="multitrack-runtime-indicators" aria-label="Multitrack feature status">
+        <span id="mt-audio-indicator" class="multitrack-runtime-pill" data-state="idle"><i></i><b>Playback</b><em>No lanes</em></span>
+        <span id="mt-mix-indicator" class="multitrack-runtime-pill" data-state="idle"><i></i><b>Mix layout</b><em>Add two lanes</em></span>
       </div>
       <div class="multitrack-transport">
         <div class="multitrack-transport-buttons">
